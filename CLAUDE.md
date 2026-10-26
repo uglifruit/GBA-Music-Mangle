@@ -71,7 +71,28 @@ an assistant.
 - INT accumulator headroom: `dt` is capped at 2048 counts, so `dt × tempoI × 408` stays under 2^31
   for tempoI ≤ 2040. `mod.c` caps tempoU at ×4 to keep it so.
 
+## Song tables and SFX (`scan.c`, added 2026-10-26 after `milestone-1`)
+
+- **The signature pass collects EVERY SelectSong match**, because a cart can hold more than one
+  library copy (a two-in-one). The heuristic keeps the longest 8 runs, and runs only when no
+  signature matched. Tables with no playable song are dropped. `g_scan` is a macro for
+  `g_tables[g_tableIx]`, so the older readers work unchanged.
+- **SFX are songs on music player ≠ 0** (the entry's `ms` field), in the same table. SET > SONG
+  LIST filters ALL/MUSIC/SFX, and `g_songPlayer[]` records each song's player.
+- An effect with SONG END = REPEAT restarts as soon as it ends. **Every restart counts a beat and
+  a loop**, so the pulse outputs fire per hit. That's deliberate, but it surprises on first sight.
+
 ## Modulator (`mod.c`)
+
+- **Three ways in, summed:** MAP (Workshop sources × depth), BTN (the GBA's buttons in PERFORM
+  mode: HOLD/LATCH add `2047 × amount` like a full-scale source, STEP edits the BASE value, an EDGE
+  destination fires), and BASE (each destination's resting value **in its own units**: programs,
+  bytes, semitones, cents, tracks; ranges in `s_baseMin/Max`). Bypass zeroes all three.
+- **PERFORM mode turns off auto-repeat.** A held button is a HOLD, and a repeat would turn one STEP
+  press into a stream. `modtest` checks this.
+- `tools/pcplay/modtest` drives `mod_update()` with stubbed link inputs and simulated keys
+  (`g_hostIo[0x130]`, active low). 22 checks, all passing 2026-10-26. Run it after touching
+  `mod.c`.
 
 - The FM card's division of labour: raw inputs arrive, and all meaning is in `g_patch.mod[]`.
 - Destination kinds: **EDGE** (clock/reset/next), **POS** (only the positive half acts, so an
@@ -80,9 +101,11 @@ an assistant.
 - Transpose is 1V/oct at **depth 63**: a semitone is 1792 in v×depth units.
 - The follower drops the gate for 3 ms on a new note while the gate is high, so legato notes
   retrigger downstream envelopes.
-- **Patch magic `'MP'` (0x4D50), `PATCH_VERSION 1`.** The FM card's rules apply: bump the version
-  for any change of layout *or* meaning, and prefer appending + migrating. The scene (song + mutes)
-  restores only when the game code matches.
+- **Patch magic `'MP'` (0x4D50), `PATCH_VERSION 2`.** The FM card's rules apply: bump the version
+  for any change of layout *or* meaning, and prefer appending + migrating. v2 APPENDED table, list,
+  BASE and BTN; `mod_patch_accept()` migrates a zero-padded v1 by giving it the factory buttons.
+  The scene (table, list, song, mutes) restores only when the game code matches. Patch is 82 bytes,
+  and a `_Static_assert` guards the 256-byte slot.
 - **A loaded patch is copied out of `g_patchBuf` before validation.** The buffer has no alignment
   guarantee, and the ARM7 rotates a misaligned halfword read rather than faulting.
 
@@ -119,7 +142,7 @@ an assistant.
 
 ## Payload facts
 
-- 43.9 KB, about 6.7 s to upload. IWRAM holds about 5 KB: the DMA handlers, the dispatcher,
+- 51.6 KB, about 7.8 s to upload. IWRAM holds about 5 KB: the DMA handlers, the dispatcher,
   `mixer_render`, the scan loop, the rings, the echo line and the accumulators.
 - Title `GBACARTPLAY`, code `CGMP`.
 - `gfx_idle()` runs the link, `mod_update()` and `clock_service()`, but only once the engine is up.

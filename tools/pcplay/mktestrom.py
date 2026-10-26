@@ -11,8 +11,13 @@ song table), a sound-mode word, a voicegroup and samples, and these songs:
              440 Hz saw - pcplay's self-test measures exactly that.
   1  SPLIT   the same saw through a key-split voice and a rhythm (drum) voice.
   2  PSG     a square-wave (CGB) voice - silent in pcplay, which does not render the PSG.
-  3+ JUNK    headers whose tracks point at random bytes and whose voicegroup is random: the fuzz
+             Entered on music player 1: a sound effect, as far as the SFX filter is concerned.
+  3  BLIP    a short one-shot saw note, on music player 2: another sound effect.
+  4+ JUNK    headers whose tracks point at random bytes and whose voicegroup is random: the fuzz
              run plays these with random mangles and must never read outside the image.
+
+A SECOND copy of the library (as on a two-games-in-one cart) sits at 0x8000 with its own song
+table of three songs and its own sound-mode word (18157 Hz), so the scan must report two tables.
 """
 import math
 import random
@@ -137,11 +142,18 @@ T4 = 0x5400
 track(T4, [VOL, 100, VOICE, 1, N(24), 60, 100, W(24)], 4)
 header(0x4080, [T4], VG)
 
+# song 3: a one-shot blip (an effect: it ends with FINE, no loop)
+T5 = 0x5500
+rom[T5:T5 + 8] = bytes([VOL, 120, VOICE, 0, N(6), 84, 110, W(6)])
+rom[T5 + 8] = FINE
+header(0x40C0, [T5], VG)
+
 # junk songs: random track bytes, random voicegroup, in a random-filled region
 rng = random.Random(1234)
 JUNK = 0x20000
 rom[JUNK:JUNK + 0x40000] = bytes(rng.getrandbits(8) for _ in range(0x40000))
-songs = [0x4000, 0x4040, 0x4080]
+songs = [0x4000, 0x4040, 0x4080, 0x40C0]
+players = {0x4080: 1, 0x40C0: 2}          # the PSG song and the blip are effects
 for j in range(24):
     h = 0x4100 + j * 0x48
     tc = rng.randint(1, 16)
@@ -150,8 +162,18 @@ for j in range(24):
     songs.append(h)
 
 for i, h in enumerate(songs):
-    struct.pack_into('<IHH', rom, TABLE + 8 * i, B + h, 0, 0)
+    ms = players.get(h, 0)
+    struct.pack_into('<IHH', rom, TABLE + 8 * i, B + h, ms, ms)
 w32(TABLE + 8 * len(songs), 0)
+
+# ---- the second library copy and its table: melody, split, blip ----
+rom[0x8000:0x801E] = rom[0x1000:0x101E]
+TABLE2 = 0x9000
+w32(0x8028, B + TABLE2)
+w32(0x8100, 0x0096C800)        # DA 8 bit, 18157 Hz, master 12, 8 channels
+for i, (h, ms) in enumerate([(0x4000, 0), (0x4040, 0), (0x40C0, 2)]):
+    struct.pack_into('<IHH', rom, TABLE2 + 8 * i, B + h, ms, ms)
+w32(TABLE2 + 24, 0)
 
 with open(sys.argv[1] if len(sys.argv) > 1 else 'test.gba', 'wb') as f:
     f.write(rom)

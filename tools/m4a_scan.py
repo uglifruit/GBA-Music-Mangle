@@ -3,10 +3,12 @@
 
     python -I tools/m4a_scan.py game.gba [--songs]
 
-Prints what the GBA's SCAN page should show for the same cartridge: the method that found the
-song table, its address, the table length, the playable song count, and (with --songs) each
-playable song's header and track count. If the GBA and this disagree on a cart, one of them has a
-bug - this file is meant to stay a line-for-line mirror of scan.c, so fix both together.
+Prints what the GBA's SCAN page should show for the same cartridge: every song table found (a
+cart can carry more than one copy of the sound library), how each was found, its address and
+length, its playable songs split into music (music player 0) and sound effects (any other player),
+and (with --songs) each playable song's header, track count and player. If the GBA and this
+disagree on a cart, one of them has a bug - this file is meant to stay a line-for-line mirror of
+scan.c, so fix both together.
 
 Use your own cartridge dumps.
 """
@@ -17,6 +19,7 @@ import sys
 ROM_BASE = 0x08000000
 MAX_TRACKS = 16
 SCAN_MAX_SONGS = 2048
+SCAN_MAX_TABLES = 8
 SELECT_SONG = bytes([
     0x00, 0xb5, 0x00, 0x04, 0x07, 0x4a, 0x08, 0x49, 0x40, 0x0b,
     0x40, 0x18, 0x83, 0x88, 0x59, 0x00, 0xc9, 0x18, 0x89, 0x00,
@@ -80,14 +83,16 @@ def entry_ok(rom, e):
     return header_ok(rom, rom.u32(e))
 
 
-def find_signature(rom):
+def find_signatures(rom):
+    """Every SelectSong match, in address order, as (routine, table) - scan.c's find_signature."""
     d = rom.data
+    found = []
     off = 0
     while True:
         # next 4-aligned "00 b5" (PUSH {LR}), as next_push_lr does
         off = d.find(b'\x00\xb5', off)
         if off < 0 or off + len(SELECT_SONG) > rom.size:
-            return None
+            return found
         if off & 3:
             off += 1
             continue
@@ -96,12 +101,13 @@ def find_signature(rom):
         if diff <= SELECT_SONG_MAX_DIFF and rom.ok(a + SELECT_SONG_TABLE_OFF, 4):
             table = rom.u32(a + SELECT_SONG_TABLE_OFF)
             if not table & 3 and rom.ok(table, 8):
-                return a, table
+                found.append((a, table))
         off += 4
 
 
 def find_heuristic(rom):
-    best, best_len = 0, 0
+    """The longest few runs (>= 8 entries, >= 4 real songs), longest first."""
+    best = []
     a = ROM_BASE
     while a < rom.end:
         w = rom.u32(a) if rom.ok(a, 4) else 0
@@ -116,12 +122,14 @@ def find_heuristic(rom):
                 n += 1
                 if n >= SCAN_MAX_SONGS:
                     break
-            if real >= 4 and n > best_len:
-                best, best_len = a, n
+            if real >= 4 and n >= 8 and (len(best) < SCAN_MAX_TABLES or n > best[-1][1]):
+                best.append((a, n))
+                best.sort(key=lambda x: -x[1])        # stable: an equal run keeps its place
+                del best[SCAN_MAX_TABLES:]
             if n:
                 a += (n - 1) * 8
         a += 4
-    return best if best_len >= 8 else None
+    return [a for a, _ in best]
 
 
 def find_sound_mode(rom, near):
@@ -141,6 +149,24 @@ def find_sound_mode(rom, near):
     return 0
 
 
+def song_list(rom, table):
+    """scan_select with LIST_ALL: (entries, [(index, header, tracks, player), ...])."""
+    songs, entries, prev = [], 0, 0
+    for i in range(0xFFFF):
+        e = table + i * 8
+        if not rom.ok(e, 8):
+            break
+        hdr = rom.u32(e)
+        if not rom.isptr(hdr):
+            break
+        entries = i + 1
+        tc = header_ok(rom, hdr)
+        if hdr != prev and tc and len(songs) < SCAN_MAX_SONGS:
+            songs.append((i, hdr, tc, rom.u16(e + 4)))
+        prev = hdr
+    return entries, songs
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('rom')
@@ -155,48 +181,45 @@ def main():
     print(f'title      {title}  [{code}]')
     print(f'rom size   {rom.size // 1024} KB')
 
-    method, select, table, mode = 'NONE', 0, 0, 0
-    sig = find_signature(rom)
-    if sig:
-        method, (select, table) = 'SIGNATURE', sig
-        mode = find_sound_mode(rom, select)
-    else:
-        t = find_heuristic(rom)
-        if t:
-            method, table = 'HEURISTIC', t
-    if method == 'NONE':
+    # add_table: dedupe by table address, at most SCAN_MAX_TABLES
+    tables = []
+    sigs = find_signatures(rom)
+    cands = [('SIGNATURE', s, t) for s, t in sigs] if sigs else \
+            [('HEURISTIC', 0, t) for t in find_heuristic(rom)]
+    for method, select, table in cands:
+        if any(t[2] == table for t in tables) or len(tables) >= SCAN_MAX_TABLES:
+            continue
+        tables.append((method, select, table))
+
+    # drop tables with no playable song
+    kept = []
+    for method, select, table in tables:
+        entries, songs = song_list(rom, table)
+        if songs:
+            kept.append((method, select, table, entries, songs))
+    if not kept:
         print('method     NONE - no MP2K song table found')
         return 1
 
-    songs, entries, prev = [], 0, 0
-    for i in range(0xFFFF):
-        e = table + i * 8
-        if not rom.ok(e, 8):
-            break
-        hdr = rom.u32(e)
-        if not rom.isptr(hdr):
-            break
-        entries = i + 1
-        tc = header_ok(rom, hdr)
-        if hdr != prev and tc and len(songs) < SCAN_MAX_SONGS:
-            songs.append((i, hdr, tc, rom.u16(e + 4)))
-        prev = hdr
-
-    print(f'method     {method}')
-    if select:
-        print(f'selectsong 0x{select:08X}')
-    print(f'song table 0x{table:08X}')
-    print(f'entries    {entries}')
-    print(f'playable   {len(songs)}')
-    if mode:
-        print(f'sound mode 0x{mode:08X}  rate {M4A_RATES[((mode >> 16) & 0xF) - 1]} Hz  '
-              f'chans {(mode >> 8) & 0xF}  masvol {(mode >> 12) & 0xF}')
-    else:
-        print('sound mode not found (assuming 13379 Hz)')
-    if args.songs:
-        print('\n  n   entry  header      tracks player')
-        for n, (i, hdr, tc, ms) in enumerate(songs):
-            print(f'{n + 1:4d}  {i:5d}  0x{hdr:08X}  {tc:5d}  {ms:5d}')
+    print(f'tables     {len(kept)}')
+    for n, (method, select, table, entries, songs) in enumerate(kept):
+        music = sum(1 for s in songs if s[3] == 0)
+        print(f'\n--- table {n + 1}: {method}')
+        if select:
+            print(f'selectsong 0x{select:08X}')
+        print(f'song table 0x{table:08X}')
+        print(f'entries    {entries}')
+        print(f'playable   {len(songs)}  (music {music}, sfx {len(songs) - music})')
+        mode = find_sound_mode(rom, select) if select else 0
+        if mode:
+            print(f'sound mode 0x{mode:08X}  rate {M4A_RATES[((mode >> 16) & 0xF) - 1]} Hz  '
+                  f'chans {(mode >> 8) & 0xF}  masvol {(mode >> 12) & 0xF}')
+        else:
+            print('sound mode not found (assuming 13379 Hz)')
+        if args.songs:
+            print('\n  n   entry  header      tracks player')
+            for k, (i, hdr, tc, ms) in enumerate(songs):
+                print(f'{k + 1:4d}  {i:5d}  0x{hdr:08X}  {tc:5d}  {ms:5d}{"  (sfx)" if ms else ""}')
     return 0
 
 

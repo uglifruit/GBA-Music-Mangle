@@ -33,11 +33,43 @@ rather than a game, so they will normally report no music.
 | Up / Down, Left / Right | Choose a track |
 | A | Mute the chosen track |
 | B | Solo the chosen track |
-| SELECT | Restart the song |
-| START | Open the editor (MAP, SET, MEM, CAL pages; L/R moves between them, START returns) |
+| SELECT | **Perform mode** on/off (below) |
+| START | Open the editor (MAP, BTN, BASE, SET, MEM, CAL pages; L/R moves between them, START returns) |
 
 The PLAY page shows the song number, the clock, the bar and beat, all sixteen tracks (activity,
 current note, mute and solo), and the live value of every mangle.
+
+### Mangling from the GBA itself
+
+You don't need anything patched to mangle a song:
+
+- **Perform mode** (SELECT on the PLAY page) hands the GBA's buttons over to the **BTN** page's
+  mappings. The bottom of the screen shows what each button does. The factory buttons:
+
+  | Button | Does |
+  |---|---|
+  | A | Reverse (held) |
+  | B | Crush (held) |
+  | L / R | Voice shift down / up |
+  | Up / Down | Transpose up / down |
+  | Left / Right | Nudge the table offset |
+
+  Each button can **HOLD** a mangle while pressed, **LATCH** it on and off, or **STEP** its base
+  value. It can also fire a clock, a reset or the next song.
+- The **BASE** page sets each mangle's resting value in its own units: voice shift in programs,
+  transpose in semitones, layers in tracks stripped, and so on. CV, knobs and buttons all add on
+  top.
+
+### Song tables and sound effects
+
+Some cartridges contain more than one set of music. A two-games-in-one cart has one per game. The
+scan finds them all, and SET > SONG TABLE switches between them.
+
+Sound effects are songs too, played on a different "music player". SET > SONG LIST shows ALL,
+MUSIC or SFX. The PLAY page shows each song's player (P0 is the music). Effects are short, so they
+behave as hits:
+- With SET > SONG END on REPEAT, an effect loops.
+- With STOP, each reset trigger plays it once, like a drum.
 
 ## The panel (factory settings; every input can be re-assigned on the MAP page)
 
@@ -67,8 +99,9 @@ Other things the MAP page can assign: next song, song select by CV, table offset
 instrument table from the wrong place), solo, fine pitch, reverse (a chance each note plays
 backwards), and crush.
 
-The MEM page saves the map and settings to the Workshop's 16 memory slots. A saved slot also
-remembers the song and mutes, and restores them when loaded with the same game inserted.
+The MEM page saves the maps, base values and settings to the Workshop's 16 memory slots. A saved
+slot also remembers the song table, list, song and mutes, and restores them when loaded with the
+same game inserted.
 
 ## Building
 
@@ -89,8 +122,10 @@ Both use the Pico SDK's toolchain. No devkitPro is needed.
 python -I tools/m4a_scan.py yourgame.gba --songs     # what the GBA's scan should find
 tools/pcplay/build.sh                                # needs a C compiler; `pip install ziglang` works
 python -I tools/pcplay/mktestrom.py test.gba         # a synthetic MP2K cartridge
+tools/pcplay/build/pcplay test.gba --songs                  # list songs (--songtable N, --list 0/1/2)
 tools/pcplay/build/pcplay test.gba --song 0 --secs 10 --out song.wav
 tools/pcplay/build/pcplay test.gba --fuzz 6          # every song, random mangles, bounds-checked
+tools/pcplay/build/modtest test.gba                  # the CV / button / base logic
 ```
 `pcplay` renders a song with the payload's own engine. The PSG voices (squares, wave, noise) are
 silent in it. Use your own cartridge dumps.

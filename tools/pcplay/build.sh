@@ -14,3 +14,11 @@ EXE=build/pcplay
     pcplay.c "$P/rom.c" "$P/scan.c" "$P/player.c" "$P/cgb.c" "$P/mixer.c" "$P/m4a_tables.c" \
     -o "$EXE"
 echo "built $EXE"
+
+# modtest: the modulator against stubbed link inputs (see modtest.c).
+MT=build/modtest
+[[ "$EXE" == *.exe ]] && MT=build/modtest.exe
+"${CC_CMD[@]}" -std=gnu11 -DHOST -O1 -g -Wall -Wextra -I"$P" -I../.. \
+    modtest.c "$P/rom.c" "$P/scan.c" "$P/player.c" "$P/cgb.c" "$P/mixer.c" "$P/m4a_tables.c" \
+    "$P/mod.c" "$P/clock.c" -o "$MT"
+echo "built $MT"

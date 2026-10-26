@@ -5,9 +5,15 @@
 #include "m4a.h"
 #include "gba.h"
 
-ScanResult g_scan;
+ScanResult g_tables[SCAN_MAX_TABLES];
+uint8_t    g_tableCount;
+uint8_t    g_tableIx;
+uint8_t    g_listMode;
 uint16_t   g_songIx[SCAN_MAX_SONGS];
+uint8_t    g_songPlayer[SCAN_MAX_SONGS];
 uint16_t   g_songCount;
+
+static void add_table(uint8_t method, uint32_t selectSong, uint32_t table);
 
 // saptapper's FindSelectSongFn pattern (src/saptapper/mp2k_driver.cpp), and its offsets.
 static const uint8_t kSelectSong[30] = {
@@ -85,19 +91,19 @@ static int find_signature(ScanProgressFn progress, uint32_t *done)
             if (!rom_ok(a + SELECT_SONG_TABLE_OFF, 4)) continue;
             uint32_t table = rom_u32(a + SELECT_SONG_TABLE_OFF);
             if ((table & 3) || !rom_ok(table, SONG_ENTRY_SIZE)) continue;
-            g_scan.selectSong = a;
-            g_scan.songTable  = table;
-            return 1;
+            add_table(SCAN_SIGNATURE, a, table);        // keep going: there may be another copy
         }
         *done += CHUNK;
         if (progress) progress(PROGRESS(*done));
     }
-    return 0;
+    return g_tableCount != 0;
 }
 
 static int find_heuristic(ScanProgressFn progress, uint32_t *done)
 {
-    uint32_t best = 0, bestLen = 0;
+    // The longest few runs, kept sorted longest first.
+    uint32_t best[SCAN_MAX_TABLES], bestLen[SCAN_MAX_TABLES];
+    int nBest = 0;
     for (uint32_t base = ROM_BASE; base < g_romEnd; base += CHUNK) {
         uint32_t end = base + CHUNK;
         if (end > g_romEnd) end = g_romEnd;
@@ -114,15 +120,23 @@ static int find_heuristic(ScanProgressFn progress, uint32_t *done)
                 if (tc > 0) real++;
                 if (++len >= SCAN_MAX_SONGS) break;
             }
-            if (real >= 4 && len > bestLen) { best = a; bestLen = len; }
+            if (real >= 4 && len >= 8 && (nBest < SCAN_MAX_TABLES || len > bestLen[nBest - 1])) {
+                int k = (nBest < SCAN_MAX_TABLES) ? nBest++ : nBest - 1;
+                while (k > 0 && bestLen[k - 1] < len) {
+                    best[k] = best[k - 1];
+                    bestLen[k] = bestLen[k - 1];
+                    k--;
+                }
+                best[k] = a;
+                bestLen[k] = len;
+            }
             if (len) a += (len - 1) * SONG_ENTRY_SIZE;     // a run is never a candidate twice
         }
         *done += CHUNK;
         if (progress) progress(PROGRESS(*done));
     }
-    if (bestLen < 8) return 0;
-    g_scan.songTable = best;
-    return 1;
+    for (int i = 0; i < nBest; i++) add_table(SCAN_HEURISTIC, 0, best[i]);
+    return g_tableCount != 0;
 }
 
 // Best effort: the m4aSoundMode word m4aSoundInit loads from its literal pool, somewhere near
@@ -146,32 +160,59 @@ static uint32_t find_sound_mode(uint32_t near)
     return 0;
 }
 
-static void build_song_list(void)
+static void add_table(uint8_t method, uint32_t selectSong, uint32_t table)
 {
+    for (int i = 0; i < g_tableCount; i++) if (g_tables[i].songTable == table) return;
+    if (g_tableCount >= SCAN_MAX_TABLES) return;
+    ScanResult *t = &g_tables[g_tableCount++];
+    t->method       = method;
+    t->selectSong   = selectSong;
+    t->songTable    = table;
+    t->tableEntries = 0;
+    t->soundMode    = selectSong ? find_sound_mode(selectSong) : 0;
+    t->gameRate     = t->soundMode ? gM4aRates[((t->soundMode >> 16) & 0xF) - 1] : 13379;
+}
+
+int scan_select(int table, int listMode)
+{
+    if (table < 0 || table >= g_tableCount) table = 0;
+    if (listMode < 0 || listMode >= LIST_COUNT) listMode = LIST_ALL;
+    g_tableIx   = (uint8_t)table;
+    g_listMode  = (uint8_t)listMode;
     g_songCount = 0;
-    g_scan.tableEntries = 0;
+    if (g_tableCount == 0) return 0;
+
     uint32_t prevHdr = 0;
+    g_scan.tableEntries = 0;
     for (uint32_t i = 0; i < 0xFFFF; i++) {
         uint32_t e = g_scan.songTable + i * SONG_ENTRY_SIZE;
         if (!rom_ok(e, SONG_ENTRY_SIZE)) break;
         uint32_t hdr = rom_u32(SONG_HEADER(e));
         if (!rom_isptr(hdr)) break;                         // saptapper's end-of-table rule
         g_scan.tableEntries = (uint16_t)(i + 1);
+        uint32_t ms = rom_u16(SONG_MS(e));
+        int want = (listMode == LIST_ALL) || ((listMode == LIST_MUSIC) == (ms == 0));
         int tc;
-        if (hdr != prevHdr && scan_header_ok(hdr, &tc) && tc > 0 && g_songCount < SCAN_MAX_SONGS)
-            g_songIx[g_songCount++] = (uint16_t)i;
+        if (want && hdr != prevHdr && scan_header_ok(hdr, &tc) && tc > 0 && g_songCount < SCAN_MAX_SONGS) {
+            g_songPlayer[g_songCount] = (uint8_t)(ms > 255 ? 255 : ms);
+            g_songIx[g_songCount++]   = (uint16_t)i;
+        }
         prevHdr = hdr;
     }
+    return g_songCount;
 }
 
 int scan_run(ScanProgressFn progress)
 {
-    g_scan.method     = SCAN_NONE;
-    g_scan.selectSong = 0;
-    g_scan.songTable  = 0;
-    g_scan.soundMode  = 0;
-    g_scan.gameRate   = 13379;
-    g_songCount       = 0;
+    g_tableCount = 0;
+    g_tableIx    = 0;
+    g_songCount  = 0;
+    g_tables[0].method       = SCAN_NONE;
+    g_tables[0].selectSong   = 0;
+    g_tables[0].songTable    = 0;
+    g_tables[0].tableEntries = 0;
+    g_tables[0].soundMode    = 0;
+    g_tables[0].gameRate     = 13379;
     if (g_romSize == 0) return SCAN_NONE;
 
     // Progress runs 0..128 for the signature pass and 128..256 for the heuristic, so the bar keeps
@@ -179,21 +220,32 @@ int scan_run(ScanProgressFn progress)
     uint32_t total = g_romSize * 2, done = 0;
     s_progShift = 0;
     while ((total >> s_progShift) > 256u) s_progShift++;
-    if (find_signature(progress, &done)) {
-        g_scan.method = SCAN_SIGNATURE;
-        g_scan.soundMode = find_sound_mode(g_scan.selectSong);
-    } else {
+    if (!find_signature(progress, &done)) {
         done = g_romSize;
-        if (find_heuristic(progress, &done)) g_scan.method = SCAN_HEURISTIC;
+        find_heuristic(progress, &done);
     }
     if (progress) progress(256);
 
-    if (g_scan.soundMode) {
-        uint32_t fq = (g_scan.soundMode >> 16) & 0xF;
-        g_scan.gameRate = gM4aRates[fq - 1];
+    // Drop tables with no playable song at all (false positives), so the count means something.
+    int found = g_tableCount, keep = 0;
+    for (int i = 0; i < found; i++) {
+        g_tableCount = (uint8_t)found;
+        if (scan_select(i, LIST_ALL) == 0) continue;
+        if (keep != i) {
+            volatile uint8_t *d = (volatile uint8_t *)&g_tables[keep];
+            const volatile uint8_t *s = (const volatile uint8_t *)&g_tables[i];
+            for (unsigned b = 0; b < sizeof(ScanResult); b++) d[b] = s[b];
+        }
+        keep++;
     }
-    if (g_scan.method != SCAN_NONE) build_song_list();
-    if (g_songCount == 0) g_scan.method = SCAN_NONE;
+    g_tableCount = (uint8_t)keep;
+    if (keep == 0) {
+        g_tableIx = 0;
+        g_songCount = 0;
+        g_tables[0].method = SCAN_NONE;
+        return SCAN_NONE;
+    }
+    scan_select(0, g_listMode);
     return g_scan.method;
 }
 

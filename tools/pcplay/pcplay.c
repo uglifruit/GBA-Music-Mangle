@@ -8,10 +8,11 @@
 // The PSG ("CGB") voices write to a fake register file here and are NOT heard in the WAV - a song
 // that leans on squares and noise will sound thin. Everything else is the real thing.
 //
-//   pcplay ROM [--list] [--song N] [--secs S] [--out FILE.wav] [--mute MASK]
+//   pcplay ROM [--songs] [--song N] [--secs S] [--out FILE.wav] [--mute MASK]
 //              [--voice-shift N] [--table BYTES] [--start 0..255] [--scrub BYTES]
 //              [--reverse 0..255] [--transpose SEMIS] [--tempo PCT]
 //   pcplay ROM --fuzz N        every song, N seconds each, random mangles every 250 ms
+//   --songtable T (1-based) and --list 0/1/2 (all/music/sfx) pick the song list first, as the SET page does
 //
 // Every cart read is checked (host_rom_ptr); a read outside the image is reported and fails the run.
 
@@ -140,7 +141,7 @@ static int flag(int argc, char **argv, const char *name)
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        fprintf(stderr, "usage: pcplay ROM [--list] [--song N] [--secs S] [--out F.wav] [--fuzz SECS] ...\n");
+        fprintf(stderr, "usage: pcplay ROM [--songs] [--song N] [--secs S] [--out F.wav] [--fuzz SECS] ...\n");
         return 2;
     }
     FILE *f = fopen(argv[1], "rb");
@@ -159,15 +160,21 @@ int main(int argc, char **argv)
     if (!rom_init()) { fprintf(stderr, "no cartridge header (0x96 at 0xB2)\n"); return 1; }
     s_strict = 1;
     scan_run(NULL);
+    if (argl(argc, argv, "--songtable", 1) > 1 || argl(argc, argv, "--list", 0)) {
+        scan_select((int)argl(argc, argv, "--songtable", 1) - 1, (int)argl(argc, argv, "--list", 0));
+    }
     static const char *meth[3] = { "NONE", "SIGNATURE", "HEURISTIC" };
-    printf("%s [%s]  %u KB  scan %s  table 0x%08X  songs %u  rate %u\n", g_romTitle, g_romCode,
-           g_romSize >> 10, meth[g_scan.method], g_scan.songTable, g_songCount, g_scan.gameRate);
+    static const char *list[3] = { "all", "music", "sfx" };
+    printf("%s [%s]  %u KB  scan %s  table %u/%u at 0x%08X  %s: %u songs  rate %u\n", g_romTitle,
+           g_romCode, g_romSize >> 10, meth[g_scan.method], g_tableIx + 1u, g_tableCount, g_scan.songTable,
+           list[g_listMode % 3], g_songCount, g_scan.gameRate);
     if (g_scan.method == SCAN_NONE) return 1;
 
-    if (flag(argc, argv, "--list")) {
+    if (flag(argc, argv, "--songs")) {
         for (int n = 0; n < g_songCount; n++) {
             uint32_t e = scan_song_entry(n), hdr = rom_u32(e);
-            printf("%4d  entry %4u  header 0x%08X  tracks %u\n", n, g_songIx[n], hdr, rom_u8(hdr));
+            printf("%4d  entry %4u  header 0x%08X  tracks %2u  player %u\n", n, g_songIx[n], hdr,
+                   rom_u8(hdr), g_songPlayer[n]);
         }
         return 0;
     }

@@ -1,8 +1,15 @@
-// mod.h — the modulator: what each of the Workshop's inputs does to the player.
+// mod.h — the modulator: what the Workshop's inputs, and the GBA's own buttons, do to the player.
 //
 // The FM card's division of labour, unchanged: the Workshop streams its raw inputs, and every
-// decision about what they MEAN lives here, in a table in GBA RAM (the MAP page). One mapping per
-// source - a destination and a depth - and every destination sums whatever is mapped to it.
+// decision about what they MEAN lives here, in tables in GBA RAM. Three ways in, all summed:
+//
+//   MAP   one mapping per Workshop source (CV, audio, pulse, knobs): a destination and a depth.
+//   BTN   in PERFORM mode (SELECT on the PLAY page) the GBA's buttons are sources too: each one
+//         HOLDs a destination up while pressed, LATCHes it on and off, STEPs its BASE value, or -
+//         for the edge destinations - fires a clock, a reset, or the next song.
+//   BASE  every destination's resting value, set on the GBA in that destination's own units
+//         (programs, semitones, bytes, tracks...). With nothing patched, this is how the GBA alone
+//         mangles a song.
 //
 // Destinations come in three kinds:
 //   EDGE  the source's rising edges do something (clock, reset, next song)
@@ -14,6 +21,9 @@
 //   PU2  -> CLOCK          AU1 -> RESET           AU2 -> SAMPLE START
 //   CV1  -> VOICE SHIFT    CV2 -> TRANSPOSE (1V/oct)
 //   MAIN -> LAYERS         X   -> TEMPO           Y   -> ROM SCRUB
+// The factory buttons (PERFORM mode):
+//   A hold REVERSE   B hold CRUSH   L/R step VOICE SHIFT   UP/DOWN step TRANSPOSE
+//   LEFT/RIGHT step TABLE OFFSET
 // Switch: UP bypasses every mangle, DOWN (momentary) restarts the song.
 #pragma once
 
@@ -50,11 +60,33 @@ extern const char *src_name[SRC_COUNT];
 #define DEST_CRUSH   15    // POS:  sample-and-hold and bit reduction on the output
 #define DEST_COUNT   16
 extern const char *dest_name[DEST_COUNT];
+extern const char *dest_short[DEST_COUNT];   // three letters, for the PERFORM legend
+int  dest_is_edge(int d);
+int  dest_has_base(int d);                    // has a BASE value (not EDGE, not SONG, not NONE)
+int  base_min(int d);
+int  base_max(int d);
 
 typedef struct {
     uint8_t dest;
     int8_t  depth;         // -64..+63
 } ModSlot;
+
+// ---- GBA buttons in PERFORM mode (BTN page) ----
+#define BTN_HOLD  0        // adds `amount` at full scale while held
+#define BTN_LATCH 1        // each press toggles the same on or off
+#define BTN_STEP  2        // each press adds `amount` to the destination's BASE value
+#define BTN_MODES 3
+extern const char *btn_mode_name[BTN_MODES];
+
+#define BTN_SLOTS 8        // A, B, L, R, UP, DOWN, LEFT, RIGHT
+extern const char *btn_name[BTN_SLOTS];
+extern const uint16_t btn_key[BTN_SLOTS];     // the GbaKey bit for each slot
+
+typedef struct {
+    uint8_t dest;
+    int8_t  amount;        // HOLD/LATCH: -64..+63 like a depth; STEP: base units per press
+    uint8_t mode;          // BTN_*
+} BtnSlot;
 
 // Switch actions (SET page).
 #define SWU_NONE   0
@@ -75,8 +107,11 @@ extern const uint32_t scrub_len[SCRUB_LEN_COUNT];
 // 'MP', not the FM card's 'FM' or 108's 'GB': a slot written by another GBA program is rejected
 // ("BAD DATA") rather than misread. BUMP PATCH_VERSION whenever a stored field changes its layout
 // or its meaning, and prefer appending + migrating to rejecting (see the FM card's CLAUDE.md).
+//   v1  the map, settings, scene.
+//   v2  table + list mode, BASE values, BTN map - APPENDED. A v1 slot arrives zero-padded past its
+//       end; mod_patch_accept() gives it the factory buttons and migrates it.
 #define PATCH_MAGIC   0x4D50u
-#define PATCH_VERSION 1
+#define PATCH_VERSION 2
 
 typedef struct {
     uint16_t magic;
@@ -96,6 +131,11 @@ typedef struct {
     char     game[4];
     uint16_t song;             // playable-song index
     uint16_t mute;             // the PLAY page's mutes
+    // ---- v2 ---- (keep appending; nothing above may move)
+    uint8_t  table;            // scene: song table index
+    uint8_t  list;             // scene: LIST_*
+    int8_t   base[DEST_COUNT]; // BASE values, in each destination's own units
+    BtnSlot  btn[BTN_SLOTS];
 } Patch;
 
 extern Patch g_patch;
@@ -104,18 +144,21 @@ extern Patch g_patch;
 extern int      g_song;                 // selected playable song, -1 if none
 extern uint16_t g_uiMute;               // PLAY page mutes (bit per track)
 extern uint8_t  g_uiSolo;               // PLAY page solo, 0xFF = none
-extern int32_t  g_destVal[DEST_COUNT];  // each destination's summed value, -2048..2047
+extern int32_t  g_destVal[DEST_COUNT];  // each destination's CV + button value, -2048..2047
 extern uint8_t  g_bypass;               // switch UP is bypassing the mangles
 extern uint8_t  g_srcHigh;              // bit per source: its Schmitt trigger is high
+extern uint8_t  g_perform;              // PERFORM mode: the buttons drive the BTN map
+extern uint8_t  g_btnLatch;             // bit per BTN slot: latched on
 
 void mod_init(void);
 void mod_update(void);                  // every main-loop iteration
 void mod_song_select(int n);            // wraps; restarts the clock alignment
 void mod_song_step(int delta);
 void mod_restart(void);                 // restart the current song (RESET)
+void mod_set_list(int table, int listMode);   // switch song table / list, start its first song
 
 void mod_default_patch(void);
-int  mod_patch_valid(const Patch *p);
+int  mod_patch_accept(Patch *p);        // validate, migrate older versions, clamp; 0 = reject
 void mod_patch_applied(void);           // push the patch's settings into the engine
 void mod_patch_prepare_save(void);      // record the scene into g_patch before a save
 void mod_patch_loaded(void);            // after a load: settings, and the scene if it is this game

@@ -1,22 +1,25 @@
 // ui.h — the screen: the boot SCAN screen, the PLAY page, and a paged editor.
 //
 // PLAY is the performance page: the song, the clock, sixteen track lanes (mute, solo, activity,
-// note), and the mangles' live values. START enters the editor; L/R move between its pages and
-// START returns to PLAY.
+// note), and the mangles' live values. SELECT toggles PERFORM mode, where the GBA's buttons drive
+// the BTN map instead of the page. START enters the editor; L/R move between its pages and START
+// returns to PLAY.
 //
 // These values ARE the index into page_tab[] in ui.c, and the status word sends the page number
-// upstream to the LEDs. Renumbering here without reordering that array gives a tab bar that lies
-// rather than a compile error.
+// upstream. Renumbering here without reordering that array gives a tab bar that lies rather than a
+// compile error.
 #pragma once
 
 #include <stdint.h>
 
 #define PAGE_PLAY  0
 #define PAGE_MAP   1
-#define PAGE_SET   2
-#define PAGE_MEM   3
-#define PAGE_CAL   4
-#define PAGE_COUNT 5
+#define PAGE_BTN   2
+#define PAGE_BASE  3
+#define PAGE_SET   4
+#define PAGE_MEM   5
+#define PAGE_CAL   6
+#define PAGE_COUNT 7
 
 extern uint8_t g_page;
 
