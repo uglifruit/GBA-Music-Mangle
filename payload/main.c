@@ -34,6 +34,7 @@
 
 #define REG_BASE   0x04000000
 #define REG_VCOUNT (*(volatile uint16_t *)(REG_BASE + 0x0006))
+#define REG_KEYINPUT (*(volatile uint16_t *)(REG_BASE + 0x0130))
 
 // Set once the engine is up. Before that, gfx_idle() may only keep the link alive.
 static uint8_t s_engineUp = 0;
@@ -66,6 +67,21 @@ static void scan_cart(void)
     g_plGameRate = g_scan.gameRate;
 }
 
+// Hold the scan result on screen, keeping everything serviced: 90 frames, or until a button is
+// pressed (and released) when nothing playable was found.
+static void hold_result(void)
+{
+    int wait = (g_songCount == 0 && g_romSize != 0);
+    int pressed = 0;
+    for (int f = 0; wait || f < 90; f++) {
+        while (REG_VCOUNT <  SCREEN_H) gfx_idle();
+        while (REG_VCOUNT >= SCREEN_H) gfx_idle();
+        uint16_t down = (uint16_t)(~REG_KEYINPUT & 0x03FF);
+        if (down) pressed = 1;
+        else if (pressed) wait = 0;
+    }
+}
+
 // SET > RESCAN CART. The cart cannot change under a running console, but a scan that went wrong
 // (a dusty contact on the first read) can be repeated without a power cycle.
 static void rescan(void)
@@ -75,11 +91,7 @@ static void rescan(void)
     s_engineUp = 0;
     scan_cart();
     s_engineUp = up;
-    // Hold the result on screen for a moment, keeping everything serviced.
-    for (int f = 0; f < 90; f++) {
-        while (REG_VCOUNT <  SCREEN_H) gfx_idle();
-        while (REG_VCOUNT >= SCREEN_H) gfx_idle();
-    }
+    hold_result();
     if (g_songCount) mod_song_select(0);
     ui_init();
 }
@@ -104,11 +116,9 @@ int main(void)
     s_engineUp = 1;
     g_ui_rescan = rescan;
 
-    // Let the scan result be read (about a second and a half), then start the first song.
-    for (int f = 0; f < 90; f++) {
-        while (REG_VCOUNT <  SCREEN_H) gfx_idle();
-        while (REG_VCOUNT >= SCREEN_H) gfx_idle();
-    }
+    // Let the scan result be read (about a second and a half), then start the first song. With no
+    // music it stays up until a button is pressed: it is the only thing worth reading.
+    hold_result();
     if (g_songCount) mod_song_select(0);
     ui_init();
 

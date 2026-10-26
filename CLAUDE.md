@@ -20,14 +20,18 @@ an assistant.
   `docs/PLAYER_SPEC.md`, on branch `codex/mp2k-player`, merged 2026-10-26. It passed the spec's checks.
   **The spec is the contract**: `player.h` is its interface. Changing a hook's meaning means
   changing the spec too.
-- **Not yet tested on hardware** (as of 2026-10-26). The engine is verified on the PC only (see
-  "Testing").
+- **First hardware report 2026-10-26:** START+SELECT multiboot with a cart inserted WORKS, and the
+  scan found 416 songs on Pokémon Ruby (AXVE). Playback "didn't sound like songs": the list then
+  started on ALL (Ruby's first ~250 are effects), and an unpatched CV1 reading a count below 0 shifted
+  every voice by -1 (see Modulator). Both fixed the same day; not yet re-tested.
+- No MP2K data on Go Go Beckham, Premier Manager, or Hoyle's: European third-party titles, which are
+  likely on other engines (GAX, Krawall, ...). The engine sniff (below) will say which, if their
+  engine leaves a signature.
 
 ## OPEN RISKS, in the order the first hardware session should settle them
 
-1. **Multiboot with a cart inserted needs START+SELECT held at power-on.** FIX94's
-   gba-link-cable-dumper relies on this, but it hasn't been seen on this console. If it doesn't
-   work, nothing else matters.
+1. ~~Multiboot with a cart inserted needs START+SELECT held at power-on.~~ **Settled 2026-10-26:
+   it works.** Audio also comes out, so the DMA design is at least running.
 2. **The FM card's DMA-IRQ assumption** (both sound DMAs raise an IRQ after every FIFO block) is
    inherited unchanged, at 16384 Hz. A click at 64 Hz (16384/256), or silence, means it does not
    hold.
@@ -79,8 +83,31 @@ an assistant.
   `g_tables[g_tableIx]`, so the older readers work unchanged.
 - **SFX are songs on music player ≠ 0** (the entry's `ms` field), in the same table. SET > SONG
   LIST filters ALL/MUSIC/SFX, and `g_songPlayer[]` records each song's player.
+- **The scan starts on the MUSIC list** whenever the table has any player-0 song (ALL otherwise).
+  A saved scene from the same game still restores its own list.
 - An effect with SONG END = REPEAT restarts as soon as it ends. **Every restart counts a beat and
   a loop**, so the pulse outputs fire per hit. That's deliberate, but it surprises on first sight.
+
+## Other engines (`scan.c` sniff, added 2026-10-26)
+
+- **The heuristic pass also looks for other engines' text**, so a cart with no MP2K says what it
+  uses instead. Only signatures confirmed at a primary source are in: GAX ("GAX Sound Engine",
+  "GAX ENGINE V"; TCRF game pages and loveemu's gaxtapper), Krawall ("Krawall": retail builds have
+  "$Id: Krawall ...", and the open-sourced lib/general.c has "$Krawall v1.0.0"), and whole XM
+  modules ("Extended Module: "). **Apex Audio System was checked and leaves no string.** Don't
+  add an engine from memory.
+- Every signature is ≥ 7 bytes, so one of its first four 4-byte windows is always word-aligned. The
+  pass hashes each word it already reads into a 1024-bit filter, and does a full compare only on a
+  hit. It costs a multiply and a bit test per word, and runs only when MP2K wasn't found.
+- **The heuristic now also runs when the signature matched but every table it found was empty.**
+  Before, that case reported NONE without trying the heuristic.
+- `tools/pcplay/mkenginerom.py` builds a test cart with every signature at a different alignment,
+  one ending on the image's last byte, plus a near miss. C and Python both report
+  `GAX KRAWALL XM x2`.
+- With no music, the result screen stays up until a button is pressed and released
+  (`hold_result()` in main.c).
+- Go Go Beckham, Premier Manager and Hoyle's all reported no MP2K on the first hardware session.
+  Re-scan them with this build to name their engines.
 
 ## Modulator (`mod.c`)
 
@@ -88,10 +115,13 @@ an assistant.
   mode: HOLD/LATCH add `2047 × amount` like a full-scale source, STEP edits the BASE value, an EDGE
   destination fires), and BASE (each destination's resting value **in its own units**: programs,
   bytes, semitones, cents, tracks; ranges in `s_baseMin/Max`). Bypass zeroes all three.
+- **A dead band of ±24 counts on every value source** (not PU2), not offset outside it, so 1V/oct
+  stays exact. Quantised destinations **divide, never shift**: `dv >> 5` floors, and a CV1 reading
+  of -1 gave a voice shift of -1 (every instrument swapped). This was the first hardware bug.
 - **PERFORM mode turns off auto-repeat.** A held button is a HOLD, and a repeat would turn one STEP
   press into a stream. `modtest` checks this.
 - `tools/pcplay/modtest` drives `mod_update()` with stubbed link inputs and simulated keys
-  (`g_hostIo[0x130]`, active low). 22 checks, all passing 2026-10-26. Run it after touching
+  (`g_hostIo[0x130]`, active low). 45 checks, all passing 2026-10-26. Run it after touching
   `mod.c`.
 
 - The FM card's division of labour: raw inputs arrive, and all meaning is in `g_patch.mod[]`.
@@ -121,7 +151,7 @@ an assistant.
 
 ## Testing (`tools/`)
 
-- `m4a_scan.py ROM` mirrors the scan.
+- `m4a_scan.py ROM` mirrors the scan, including the engine sniff.
 - `pcplay/build.sh` builds the payload's engine for the PC under `-DHOST`, with zig's clang
   (`pip install ziglang`; this machine has no other native compiler). Every cart read goes through
   `host_rom_ptr`, which reports anything outside the image.
@@ -142,7 +172,7 @@ an assistant.
 
 ## Payload facts
 
-- 51.6 KB, about 7.8 s to upload. IWRAM holds about 5 KB: the DMA handlers, the dispatcher,
+- 53.0 KB, about 8.0 s to upload. IWRAM holds about 5 KB: the DMA handlers, the dispatcher,
   `mixer_render`, the scan loop, the rings, the echo line and the accumulators.
 - Title `GBACARTPLAY`, code `CGMP`.
 - `gfx_idle()` runs the link, `mod_update()` and `clock_service()`, but only once the engine is up.

@@ -633,6 +633,8 @@ static void mem_poll(void)
 
 // ---- CAL --------------------------------------------------------------------------------------
 
+static void engine_line(char *t);
+
 static void cal_draw(void)
 {
     char t[40];
@@ -644,11 +646,15 @@ static void cal_draw(void)
     a = put_str(t, a, "  TABLES ");
     put_dec(t, a, g_tableCount, 1);
     field(0, 4, y, 36, t, COL_MID); y += 10;
-    a = put_str(t, 0, "TABLE  ");
-    a = put_hex(t, a, g_scan.songTable, 8);
-    a = put_str(t, a, " ");
-    a = put_dec(t, a, g_scan.tableEntries, 1);
-    put_str(t, a, " ENTRIES");
+    if (g_scan.method == SCAN_NONE) {
+        engine_line(t);                                 // what the cart uses instead
+    } else {
+        a = put_str(t, 0, "TABLE  ");
+        a = put_hex(t, a, g_scan.songTable, 8);
+        a = put_str(t, a, " ");
+        a = put_dec(t, a, g_scan.tableEntries, 1);
+        put_str(t, a, " ENTRIES");
+    }
     field(1, 4, y, 36, t, COL_MID); y += 10;
     a = put_str(t, 0, "SONGS  ");
     a = put_dec(t, a, g_songCount, 1);
@@ -763,16 +769,33 @@ void ui_scan_progress(uint32_t done256)
     bar(0, 40, 96, 160, 6, (int)((done256 * 160) >> 8), COL_BAR);
 }
 
+// What the heuristic pass's sniff found instead of MP2K, in one line.
+static void engine_line(char *t)
+{
+    int a = 0;
+    if (!g_engines) { put_str(t, 0, "ENGINE UNKNOWN (NO SIGNATURE)"); return; }
+    a = put_str(t, a, "ENGINE:");
+    if (g_engines & ENG_GAX)     a = put_str(t, a, " GAX");
+    if (g_engines & ENG_KRAWALL) a = put_str(t, a, " KRAWALL");
+    if (g_engines & ENG_XM) {
+        a = put_str(t, a, " XM x");
+        put_dec(t, a, g_xmCount, 1);
+    }
+}
+
 void ui_scan_result(void)
 {
     char t[40];
-    rect(0, 80, SCREEN_W, 30, COL_BG);
+    rect(0, 80, SCREEN_W, 54, COL_BG);
     if (!g_romSize) {
         text_centre(82, "INSERT A CART, THEN HOLD", COL_WAIT, 1);
         text_centre(94, "START+SELECT WHILE POWERING ON", COL_WAIT, 1);
     } else if (g_scan.method == SCAN_NONE) {
         text_centre(82, "NO MP2K MUSIC FOUND", COL_FAIL, 1);
-        text_centre(94, "THIS GAME USES ANOTHER ENGINE", COL_DIM, 1);
+        engine_line(t);
+        text_centre(94, t, g_engines ? COL_MID : COL_DIM, 1);
+        if (g_engineInfo[0]) text_centre(106, g_engineInfo, COL_DIM, 1);
+        text_centre(124, "PRESS A BUTTON", COL_WAIT, 1);
     } else {
         int a = put_dec(t, 0, g_songCount, 1);
         a = put_str(t, a, " SONGS FOUND");

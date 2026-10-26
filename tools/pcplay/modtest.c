@@ -60,6 +60,7 @@ static void neutral(void)
     update();
 }
 
+#define DEAD_BAND_TEST 24                         // mod.c's DEAD_BAND
 #define K_A (1u << 0)
 #define K_B (1u << 1)
 #define K_R (1u << 8)
@@ -99,6 +100,24 @@ int main(int argc, char **argv)
     g_in[1] = 2048 - 2 * 341; update();
     CHECK(g_mods.pitch == -24 * 256, "CV2 -2V: pitch %d, want %d", g_mods.pitch, -24 * 256);
     neutral();
+
+    // 2b. Readings just off 0 mangle nothing (an unpatched jack, a knob at noon), on either side.
+    for (int o = -30; o <= 30; o += 3) {
+        g_in[0] = (uint16_t)(2048 + o); g_in[1] = (uint16_t)(2048 + o); g_in[2] = (uint16_t)(2048 + o);
+        g_in[3] = (uint16_t)(2048 + o); g_knob[1] = (uint16_t)(2048 + o); g_knob[2] = (uint16_t)(2048 + o);
+        update();
+        int inBand = o > -DEAD_BAND_TEST && o < DEAD_BAND_TEST;
+        CHECK(g_mods.voiceShift == 0 && (!inBand || (g_mods.pitch == 0 && g_mods.sampleStart == 0 &&
+              g_mods.romScrub == 0 && g_mods.tempoU == 0x100)),
+              "input %+d: vsh %d pitch %d sst %u scrub %ld tempo %u", o, g_mods.voiceShift, g_mods.pitch,
+              g_mods.sampleStart, (long)g_mods.romScrub, g_mods.tempoU);
+    }
+    g_in[0] = 2048 - 341; update();
+    CHECK(g_mods.voiceShift == -10, "CV1 -1V: voice shift %d, want -10", g_mods.voiceShift);
+    neutral();
+
+    // 2c. The scan starts on the MUSIC list (the test cart has effects on players 1 and 2).
+    CHECK(g_listMode == LIST_MUSIC, "default list %u, want MUSIC", g_listMode);
 
     // 3. Main knob full right strips layers down to track 1 (song 0 has 2 tracks).
     g_knob[0] = 4095; update();

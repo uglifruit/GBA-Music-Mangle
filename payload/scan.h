@@ -5,8 +5,9 @@
 //   SIGNATURE  saptapper's: the library's SelectSong (m4aSongNumStart) Thumb routine, matched
 //              loosely (4-aligned, at most 8 of its 30 bytes may differ - literal-pool offsets move
 //              between builds). The song table's address sits in its literal pool, 40 bytes in.
-//   HEURISTIC  agbplay-style, when no signature matches (an unusual library build): the longest
-//              runs of consecutive entries that each point at a believable song header.
+//   HEURISTIC  agbplay-style, when the signature finds no table with a playable song (an unusual
+//              library build): the longest runs of consecutive entries that each point at a
+//              believable song header.
 //
 // Neither is allowed to trust anything: a believable header is one whose track count, voicegroup
 // pointer and every track pointer check out against the image bounds.
@@ -74,3 +75,23 @@ int scan_header_ok(uint32_t hdr, int *tracks);
 
 // The table address of playable song n (0 .. g_songCount-1).
 uint32_t scan_song_entry(int n);
+
+// OTHER ENGINES. A cart with no MP2K table gets the heuristic pass, which reads every word of the
+// image; while it does, it also looks for the text other sound engines leave in a cart, so the
+// screen can say what the game uses instead. Only signatures checked against a primary source:
+//   GAX      Shin'en's engine, licensed to many third-party games. Its credit "GAX Sound Engine 3.05
+//            (Aug 13 2003) (c) Shin'en ..." and a later "GAX ENGINE V3.05" (TCRF; loveemu's gaxtapper).
+//   KRAWALL  Sebastian Kienzl's XM/S3M player. Retail builds carry a CVS "$Id: Krawall ..." line
+//            (TCRF; some are stripped), the open-sourced library "$Krawall v1.0.0" (lib/general.c).
+//   XM       a whole FastTracker 2 module stored as-is: "Extended Module: " and its 20-byte name.
+// Engines that leave no text (Apex Audio System, checked in its source; most in-house engines)
+// cannot be named this way.
+#define ENG_GAX     (1u << 0)
+#define ENG_KRAWALL (1u << 1)
+#define ENG_XM      (1u << 2)
+#define ENGINE_INFO_LEN 38                    // a full line of 5x7 text, less a margin
+extern uint8_t  g_engines;                    // ENG_* found by the last scan's heuristic pass
+extern uint16_t g_xmCount;                    // XM modules found
+// The best signature found, verbatim from the cart with the text after it (printable ASCII only):
+// "GAX Sound Engine 3.05 (Aug 13 2003)", "Krawall v1.0.0", "Extended Module: Title Theme".
+extern char     g_engineInfo[ENGINE_INFO_LEN + 1];

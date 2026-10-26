@@ -92,6 +92,12 @@ static uint8_t  s_retrig;
 #define EDGE_UP   341
 #define EDGE_DOWN 170
 
+// Dead band around 0 for the value sources, in input counts (about 70 mV, or half a percent of a
+// knob's travel). An unpatched jack or a knob left at noon reads a few counts either side of 0, and
+// that must mangle nothing: a voice shift of -1 from a reading of -1 swaps every instrument.
+// Readings outside it are not offset, so 1V/oct transpose stays exact.
+#define DEAD_BAND 24
+
 // Auto-repeat for held d-pad and shoulder buttons, in Timer 2 counts. Not in PERFORM mode, where a
 // held button is a HOLD and a repeat would be a stream of STEPs.
 #define REPEAT_DELAY (16384u * 2 / 5)       // 400 ms
@@ -319,6 +325,8 @@ void mod_update(void)
     v[SRC_MAIN] = (int32_t)g_knob[0] - 2048;
     v[SRC_X]    = (int32_t)g_knob[1] - 2048;
     v[SRC_Y]    = (int32_t)g_knob[2] - 2048;
+    for (int s = 0; s < SRC_COUNT; s++)
+        if (s != SRC_PU2 && v[s] > -DEAD_BAND && v[s] < DEAD_BAND) v[s] = 0;
 
     uint8_t edges[SRC_COUNT];
     for (int s = 0; s < SRC_COUNT; s++) {
@@ -403,7 +411,7 @@ void mod_update(void)
         if (edgeN[DEST_NEXT]) mod_song_step(1);
         else if (edgeN[DEST_RESET]) mod_restart();
         if (mapped[DEST_SONG]) {
-            int off = (int)((g_destVal[DEST_SONG] * 16) >> 11);    // +-16 songs
+            int off = (int)(g_destVal[DEST_SONG] / 128);         // +-16 songs
             if (off != s_songCvOff) {
                 s_songCvOff = off;
                 play_song(s_songBase + off);
@@ -421,7 +429,8 @@ void mod_update(void)
         g_mods.reverseChance = 0; g_mods.romScrub = 0; g_mods.pitch = 0; g_mods.tempoU = 0x100;
         g_crushHold = 1; g_crushMask = 0xFF;
     } else {
-        g_mods.voiceShift    = (int16_t)clampi((dv[DEST_VSHIFT] >> 5) + bs[DEST_VSHIFT], -127, 127);
+        // Divides, not shifts: a shift floors, and -1 >> 5 is a whole program down.
+        g_mods.voiceShift    = (int16_t)clampi(dv[DEST_VSHIFT] / 32 + bs[DEST_VSHIFT], -127, 127);
         g_mods.tableOffset   = (int16_t)(dv[DEST_TABLE] + bs[DEST_TABLE]);
         g_mods.sampleStart   = (uint8_t)clampi((dv[DEST_START] >> 3) + bs[DEST_START] * 2, 0, 255);
         g_mods.reverseChance = (uint8_t)clampi((dv[DEST_REVERSE] >> 3) + bs[DEST_REVERSE] * 2, 0, 255);

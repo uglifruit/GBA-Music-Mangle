@@ -12,8 +12,76 @@ uint8_t    g_listMode;
 uint16_t   g_songIx[SCAN_MAX_SONGS];
 uint8_t    g_songPlayer[SCAN_MAX_SONGS];
 uint16_t   g_songCount;
+uint8_t    g_engines;
+uint16_t   g_xmCount;
+char       g_engineInfo[ENGINE_INFO_LEN + 1];
 
 static void add_table(uint8_t method, uint32_t selectSong, uint32_t table);
+
+// ---- other engines' signatures (see scan.h) ----
+// Every signature is at least 7 bytes long, so wherever it sits, one of its first four 4-byte
+// windows is word-aligned: a word-by-word pass can find it by comparing each word with those four.
+// A 1024-bit filter on a hash of the word keeps that to a test per word; a full compare runs only
+// on the rare words that pass.
+typedef struct { const char *s; uint8_t len, engine; } Sniff;
+static const Sniff kSniff[] = {                     // in order of preference for g_engineInfo
+    { "GAX Sound Engine",  16, ENG_GAX     },
+    { "GAX ENGINE V",      12, ENG_GAX     },
+    { "Krawall",            7, ENG_KRAWALL },
+    { "Extended Module: ", 17, ENG_XM      },
+};
+#define SNIFF_N ((int)(sizeof(kSniff) / sizeof(kSniff[0])))
+#define SNIFF_HASH(w) (((w) * 0x9E3779B1u) >> 22)
+static uint32_t s_sniffWord[SNIFF_N][4];
+static uint32_t s_sniffBits[32];
+static uint8_t  s_infoFrom;                         // kSniff index that wrote g_engineInfo
+
+static void sniff_init(void)
+{
+    g_engines = 0;
+    g_xmCount = 0;
+    g_engineInfo[0] = 0;
+    s_infoFrom = 0xFF;
+    for (int i = 0; i < 32; i++) s_sniffBits[i] = 0;
+    for (int p = 0; p < SNIFF_N; p++) {
+        const uint8_t *s = (const uint8_t *)kSniff[p].s;
+        for (int k = 0; k < 4; k++) {
+            uint32_t w = s[k] | (uint32_t)s[k + 1] << 8 | (uint32_t)s[k + 2] << 16 | (uint32_t)s[k + 3] << 24;
+            s_sniffWord[p][k] = w;
+            uint32_t h = SNIFF_HASH(w);
+            s_sniffBits[h >> 5] |= 1u << (h & 31);
+        }
+    }
+}
+
+// The word w at the aligned address a passed the filter: which signatures really start near it?
+static void sniff_hit(uint32_t a, uint32_t w)
+{
+    for (int p = 0; p < SNIFF_N; p++) {
+        for (uint32_t k = 0; k < 4; k++) {
+            if (s_sniffWord[p][k] != w || a - ROM_BASE < k) continue;
+            const Sniff *s = &kSniff[p];
+            uint32_t at = a - k;
+            if (!rom_ok(at, s->len)) continue;
+            unsigned i = 0;
+            while (i < s->len && rom_u8(at + i) == (uint8_t)s->s[i]) i++;
+            if (i < s->len) continue;
+            g_engines |= s->engine;
+            if (s->engine == ENG_XM && g_xmCount < 0xFFFF) g_xmCount++;
+            if (p < s_infoFrom) {
+                s_infoFrom = (uint8_t)p;
+                int n = 0;
+                while (n < ENGINE_INFO_LEN && rom_ok(at + n, 1)) {
+                    uint8_t c = rom_u8(at + n);
+                    if (c < 0x20 || c > 0x7E) break;
+                    g_engineInfo[n++] = (char)c;
+                }
+                while (n > 0 && g_engineInfo[n - 1] == ' ') n--;
+                g_engineInfo[n] = 0;
+            }
+        }
+    }
+}
 
 // saptapper's FindSelectSongFn pattern (src/saptapper/mp2k_driver.cpp), and its offsets.
 static const uint8_t kSelectSong[30] = {
@@ -111,6 +179,8 @@ static int find_heuristic(ScanProgressFn progress, uint32_t *done)
             // Cheap prefilter before any header is followed: a word-aligned pointer into the
             // image, and a small player index after it.
             uint32_t w = *(const volatile uint32_t *)ROM_PTR(a);
+            uint32_t h = SNIFF_HASH(w);
+            if (s_sniffBits[h >> 5] & (1u << (h & 31))) sniff_hit(a, w);
             if ((w & 3) || !rom_isptr(w)) continue;
             if (!rom_ok(a, 8) || rom_u16(a + 4) >= 32) continue;
 
@@ -202,6 +272,26 @@ int scan_select(int table, int listMode)
     return g_songCount;
 }
 
+// Drop tables with no playable song at all (false positives), so the count means something.
+// Returns the tables kept.
+static int drop_empty(void)
+{
+    int found = g_tableCount, keep = 0;
+    for (int i = 0; i < found; i++) {
+        g_tableCount = (uint8_t)found;
+        if (scan_select(i, LIST_ALL) == 0) continue;
+        if (keep != i) {
+            volatile uint8_t *d = (volatile uint8_t *)&g_tables[keep];
+            const volatile uint8_t *s = (const volatile uint8_t *)&g_tables[i];
+            for (unsigned b = 0; b < sizeof(ScanResult); b++) d[b] = s[b];
+        }
+        keep++;
+    }
+    g_tableCount = (uint8_t)keep;
+    g_tableIx = 0;
+    return keep;
+}
+
 int scan_run(ScanProgressFn progress)
 {
     g_tableCount = 0;
@@ -220,32 +310,25 @@ int scan_run(ScanProgressFn progress)
     uint32_t total = g_romSize * 2, done = 0;
     s_progShift = 0;
     while ((total >> s_progShift) > 256u) s_progShift++;
-    if (!find_signature(progress, &done)) {
+    sniff_init();
+    find_signature(progress, &done);
+    // The heuristic (and the engine sniff riding on it) runs when the signature found no table
+    // with a playable song - none at all, or only false positives.
+    if (drop_empty() == 0) {
         done = g_romSize;
         find_heuristic(progress, &done);
+        drop_empty();
     }
     if (progress) progress(256);
-
-    // Drop tables with no playable song at all (false positives), so the count means something.
-    int found = g_tableCount, keep = 0;
-    for (int i = 0; i < found; i++) {
-        g_tableCount = (uint8_t)found;
-        if (scan_select(i, LIST_ALL) == 0) continue;
-        if (keep != i) {
-            volatile uint8_t *d = (volatile uint8_t *)&g_tables[keep];
-            const volatile uint8_t *s = (const volatile uint8_t *)&g_tables[i];
-            for (unsigned b = 0; b < sizeof(ScanResult); b++) d[b] = s[b];
-        }
-        keep++;
-    }
-    g_tableCount = (uint8_t)keep;
-    if (keep == 0) {
+    if (g_tableCount == 0) {
         g_tableIx = 0;
         g_songCount = 0;
         g_tables[0].method = SCAN_NONE;
         return SCAN_NONE;
     }
-    scan_select(0, g_listMode);
+    // Start on the MUSIC list when there is any. Games often put the effects first (Pokemon's
+    // first 250-odd songs are effects), and song 1 should be a song.
+    if (scan_select(0, LIST_MUSIC) == 0) scan_select(0, LIST_ALL);
     return g_scan.method;
 }
 

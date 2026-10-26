@@ -19,11 +19,30 @@ link.
    Pulse In 1 ← SO, and ground. This is the same cable as the sibling cards.
 2. Put a game cartridge in the GBA.
 3. **Hold START + SELECT while you switch the GBA on.** This tells the GBA to skip the cartridge
-   and wait for the Workshop. The Workshop's LEDs show upload progress (about 7 seconds).
-4. The GBA scans the cartridge for music, shows how many songs it found, and starts song 1.
+   and wait for the Workshop. The Workshop's LEDs show upload progress (about 8 seconds).
+4. The GBA scans the cartridge for music, shows how many songs it found, and starts the first piece
+   of music (sound effects are listed separately; see "Song tables and sound effects").
 
 Use an original or reproduction cartridge. Flash carts usually show their own menu at this point
 rather than a game, so they will normally report no music.
+
+### "No MP2K music found"
+
+Not every game uses Nintendo's engine. When the scan finds no MP2K music, it says what it found
+instead, and waits for a button:
+
+| Screen shows | Meaning |
+|---|---|
+| ENGINE: GAX | Shin'en's GAX engine, used by many Western third-party games. The line below gives its version. |
+| ENGINE: KRAWALL | The Krawall tracker engine (XM/S3M modules), common in European games. |
+| ENGINE: XM x*n* | *n* whole FastTracker 2 modules stored in the cart, with the first one's name. |
+| ENGINE UNKNOWN | No known signature: an in-house engine, or one that leaves no text behind. |
+
+None of these play yet: each would need its own engine. If a game you know uses MP2K reports
+nothing, try SET > CART SPEED SAFE and SET > RESCAN CART. The CAL page repeats the engine line.
+
+Game Boy and Game Boy Color carts can't be used. They switch the GBA into its Game Boy Color mode
+at power-on, so there's nothing for the Workshop to talk to.
 
 ## Playing
 
@@ -66,7 +85,8 @@ Some cartridges contain more than one set of music. A two-games-in-one cart has 
 scan finds them all, and SET > SONG TABLE switches between them.
 
 Sound effects are songs too, played on a different "music player". SET > SONG LIST shows ALL,
-MUSIC or SFX. The PLAY page shows each song's player (P0 is the music). Effects are short, so they
+MUSIC or SFX. It starts on MUSIC. (Pokémon Ruby has over 400 songs, and the first 250 or so are
+effects.) The PLAY page shows each song's player (P0 is the music). Effects are short, so they
 behave as hits:
 - With SET > SONG END on REPEAT, an effect loops.
 - With STOP, each reset trigger plays it once, like a drum.
@@ -126,6 +146,8 @@ tools/pcplay/build/pcplay test.gba --songs                  # list songs (--song
 tools/pcplay/build/pcplay test.gba --song 0 --secs 10 --out song.wav
 tools/pcplay/build/pcplay test.gba --fuzz 6          # every song, random mangles, bounds-checked
 tools/pcplay/build/modtest test.gba                  # the CV / button / base logic
+python -I tools/pcplay/mkenginerom.py engines.gba    # a cart with no MP2K, only other engines' signatures
+tools/pcplay/build/pcplay engines.gba                # should report GAX KRAWALL XM x2
 ```
 `pcplay` renders a song with the payload's own engine. The PSG voices (squares, wave, noise) are
 silent in it. Use your own cartridge dumps.

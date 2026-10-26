@@ -13,6 +13,7 @@
 //              [--reverse 0..255] [--transpose SEMIS] [--tempo PCT]
 //   pcplay ROM --fuzz N        every song, N seconds each, random mangles every 250 ms
 //   --songtable T (1-based) and --list 0/1/2 (all/music/sfx) pick the song list first, as the SET page does
+//   (default: table 1, MUSIC if it has any music, else ALL)
 //
 // Every cart read is checked (host_rom_ptr); a read outside the image is reported and fails the run.
 
@@ -160,15 +161,22 @@ int main(int argc, char **argv)
     if (!rom_init()) { fprintf(stderr, "no cartridge header (0x96 at 0xB2)\n"); return 1; }
     s_strict = 1;
     scan_run(NULL);
-    if (argl(argc, argv, "--songtable", 1) > 1 || argl(argc, argv, "--list", 0)) {
-        scan_select((int)argl(argc, argv, "--songtable", 1) - 1, (int)argl(argc, argv, "--list", 0));
+    // The scan starts on the MUSIC list when there is one (as the GBA does); --list overrides it.
+    if (flag(argc, argv, "--songtable") || flag(argc, argv, "--list")) {
+        scan_select((int)argl(argc, argv, "--songtable", 1) - 1, (int)argl(argc, argv, "--list", g_listMode));
     }
     static const char *meth[3] = { "NONE", "SIGNATURE", "HEURISTIC" };
     static const char *list[3] = { "all", "music", "sfx" };
     printf("%s [%s]  %u KB  scan %s  table %u/%u at 0x%08X  %s: %u songs  rate %u\n", g_romTitle,
            g_romCode, g_romSize >> 10, meth[g_scan.method], g_tableIx + 1u, g_tableCount, g_scan.songTable,
            list[g_listMode % 3], g_songCount, g_scan.gameRate);
-    if (g_scan.method == SCAN_NONE) return 1;
+    if (g_scan.method == SCAN_NONE) {
+        printf("engine %s%s%s", g_engines ? "" : "unknown (no signature)", (g_engines & ENG_GAX) ? "GAX " : "",
+               (g_engines & ENG_KRAWALL) ? "KRAWALL " : "");
+        if (g_engines & ENG_XM) printf("XM x%u", g_xmCount);
+        printf("\ninfo   %s\n", g_engineInfo);
+        return 1;
+    }
 
     if (flag(argc, argv, "--songs")) {
         for (int n = 0; n < g_songCount; n++) {

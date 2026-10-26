@@ -6,7 +6,9 @@
 Prints what the GBA's SCAN page should show for the same cartridge: every song table found (a
 cart can carry more than one copy of the sound library), how each was found, its address and
 length, its playable songs split into music (music player 0) and sound effects (any other player),
-and (with --songs) each playable song's header, track count and player. If the GBA and this
+and (with --songs) each playable song's header, track count and player. With no MP2K table, it
+names the engine the cart uses instead, where that engine leaves a known signature (GAX, Krawall,
+whole XM modules). If the GBA and this
 disagree on a cart, one of them has a bug - this file is meant to stay a line-for-line mirror of
 scan.c, so fix both together.
 
@@ -27,6 +29,15 @@ SELECT_SONG = bytes([
 ])
 SELECT_SONG_MAX_DIFF = 8
 SELECT_SONG_TABLE_OFF = 40
+# Other engines' signatures (scan.h, "OTHER ENGINES"): text, engine name. In order of preference
+# for the info line.
+SNIFF = [
+    (b'GAX Sound Engine', 'GAX'),
+    (b'GAX ENGINE V', 'GAX'),
+    (b'Krawall', 'KRAWALL'),
+    (b'Extended Module: ', 'XM'),
+]
+ENGINE_INFO_LEN = 38
 M4A_RATES = [5734, 7884, 10512, 13379, 15768, 18157, 21024, 26758, 31536, 36314, 40137, 42048]
 
 
@@ -105,12 +116,48 @@ def find_signatures(rom):
         off += 4
 
 
-def find_heuristic(rom):
-    """The longest few runs (>= 8 entries, >= 4 real songs), longest first."""
+class Sniff:
+    """What the heuristic pass finds of other engines: scan.c's sniff_init / sniff_hit."""
+    def __init__(self):
+        self.engines = []          # names, in the order first found
+        self.xm = 0
+        self.info = ''
+        self.info_from = None
+        # each signature's first four 4-byte windows: whichever is word-aligned is what a
+        # word-by-word pass sees
+        self.words = {}
+        for p, (sig, _) in enumerate(SNIFF):
+            for k in range(4):
+                self.words.setdefault(struct.unpack_from('<I', sig, k)[0], []).append((p, k))
+
+    def hit(self, rom, a, w):
+        for p, k in self.words.get(w, ()):
+            sig, name = SNIFF[p]
+            at = a - k
+            if a - ROM_BASE < k or not rom.ok(at, len(sig)):
+                continue
+            if rom.data[at - ROM_BASE:at - ROM_BASE + len(sig)] != sig:
+                continue
+            if name not in self.engines:
+                self.engines.append(name)
+            if name == 'XM':
+                self.xm += 1
+            if self.info_from is None or p < self.info_from:
+                self.info_from = p
+                n = 0
+                while n < ENGINE_INFO_LEN and rom.ok(at + n, 1) and 0x20 <= rom.u8(at + n) <= 0x7E:
+                    n += 1
+                self.info = rom.data[at - ROM_BASE:at - ROM_BASE + n].decode('ascii').rstrip(' ')
+
+
+def find_heuristic(rom, sniff):
+    """The longest few runs (>= 8 entries, >= 4 real songs), longest first. Sniffs as it goes."""
     best = []
     a = ROM_BASE
     while a < rom.end:
         w = rom.u32(a) if rom.ok(a, 4) else 0
+        if w in sniff.words:
+            sniff.hit(rom, a, w)
         if not (w & 3) and rom.isptr(w) and rom.ok(a, 8) and rom.u16(a + 4) < 32:
             n = real = 0
             while True:
@@ -181,24 +228,41 @@ def main():
     print(f'title      {title}  [{code}]')
     print(f'rom size   {rom.size // 1024} KB')
 
-    # add_table: dedupe by table address, at most SCAN_MAX_TABLES
-    tables = []
-    sigs = find_signatures(rom)
-    cands = [('SIGNATURE', s, t) for s, t in sigs] if sigs else \
-            [('HEURISTIC', 0, t) for t in find_heuristic(rom)]
-    for method, select, table in cands:
-        if any(t[2] == table for t in tables) or len(tables) >= SCAN_MAX_TABLES:
-            continue
-        tables.append((method, select, table))
+    def add_tables(cands, tables):
+        """add_table: dedupe by table address, at most SCAN_MAX_TABLES."""
+        for method, select, table in cands:
+            if any(t[2] == table for t in tables) or len(tables) >= SCAN_MAX_TABLES:
+                continue
+            tables.append((method, select, table))
 
-    # drop tables with no playable song
-    kept = []
-    for method, select, table in tables:
-        entries, songs = song_list(rom, table)
-        if songs:
-            kept.append((method, select, table, entries, songs))
+    def drop_empty(tables):
+        """drop tables with no playable song"""
+        kept = []
+        for method, select, table in tables:
+            entries, songs = song_list(rom, table)
+            if songs:
+                kept.append((method, select, table, entries, songs))
+        return kept
+
+    # The heuristic (and the sniff riding on it) runs when the signature found no table with a
+    # playable song - none at all, or only false positives.
+    sniff = Sniff()
+    tables = []
+    add_tables([('SIGNATURE', s, t) for s, t in find_signatures(rom)], tables)
+    kept = drop_empty(tables)
+    if not kept:
+        tables = []
+        add_tables([('HEURISTIC', 0, t) for t in find_heuristic(rom, sniff)], tables)
+        kept = drop_empty(tables)
     if not kept:
         print('method     NONE - no MP2K song table found')
+        if sniff.engines:
+            names = ' '.join(f'XM x{sniff.xm}' if e == 'XM' else e
+                             for e in sorted(sniff.engines, key=['GAX', 'KRAWALL', 'XM'].index))
+            print(f'engine     {names}')
+            print(f'info       {sniff.info}')
+        else:
+            print('engine     unknown (no signature)')
         return 1
 
     print(f'tables     {len(kept)}')
@@ -209,7 +273,8 @@ def main():
             print(f'selectsong 0x{select:08X}')
         print(f'song table 0x{table:08X}')
         print(f'entries    {entries}')
-        print(f'playable   {len(songs)}  (music {music}, sfx {len(songs) - music})')
+        print(f'playable   {len(songs)}  (music {music}, sfx {len(songs) - music})'
+              f'{"" if n else ("  - the GBA starts on the " + ("MUSIC" if music else "ALL") + " list")}')
         mode = find_sound_mode(rom, select) if select else 0
         if mode:
             print(f'sound mode 0x{mode:08X}  rate {M4A_RATES[((mode >> 16) & 0xF) - 1]} Hz  '
