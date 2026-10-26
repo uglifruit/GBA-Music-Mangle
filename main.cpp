@@ -1,12 +1,15 @@
-// GBA FM Voice — 2-operator FM voice for the Music Thing Workshop Computer
+// GBA Cart Player � plays a Game Boy Advance cartridge's own music, clocked and mangled by the rack
 //
-// Boots a cartridge-less Game Boy Advance over the pulse jacks via BIOS Multiboot, then runs a
-// live SPI link so the GBA is a synth voice played by the modular — audio out of its own
-// headphone jack, sound editing on its own screen.
+// Boots a Game Boy Advance over the pulse jacks via BIOS Multiboot WITH A CARTRIDGE INSERTED (the
+// console is powered on holding START+SELECT, so the BIOS skips the cart and waits for multiboot).
+// The payload scans the cart for the MP2K ("Sappy"/m4a) sound engine's song data and plays it
+// through its own player: audio out of the GBA's headphone jack, the song and its tracks on the
+// GBA's screen.
 //
-// THIS FIRMWARE IS 108 (GBA PSG Voice)'s, UNCHANGED BUT FOR THE PAYLOAD IT EMBEDS. The link,
-// the protocol and every message are identical; the FM engine lives entirely on the GBA side
-// (payload/), which is exactly what the division of labour below makes possible.
+// THIS FIRMWARE IS THE FM CARD'S (and 108's) BUT FOR TWO THINGS: it announces GBA_CAP_UP_PULSE and
+// turns GBA_UP_PULSE - the song's beat and loop counters - into pulses on the audio outputs. The
+// link, the protocol and every other message are unchanged; the player lives entirely on the GBA
+// side (payload/), which is what the division of labour below makes possible.
 //
 //   Pulse Out 1 (GPIO 8) -> GBA SC  (serial clock, master-driven)
 //   Pulse Out 2 (GPIO 9) -> GBA SI  (MOSI)
@@ -14,21 +17,22 @@
 //   (common ground)
 //
 // THE DIVISION OF LABOUR: the Workshop senses, the GBA is the instrument. This side reads the
-// five inputs and streams them down raw; the GBA owns pitch tracking, the modulation matrix,
-// the envelope and the UI. That is what makes the on-screen editor free — re-mapping an input
-// is a change to a table in GBA RAM, not a protocol change and not a firmware rebuild.
+// five inputs and streams them down raw; the GBA owns the clocking, the modulation matrix and the
+// UI. That is what makes the on-screen editor free � re-mapping an input is a change to a table in
+// GBA RAM, not a protocol change and not a firmware rebuild.
 //
-// Panel (what each input MEANS is decided on the GBA - see payload/synth.h):
-//   CV In 2      1V/oct pitch          Pulse In 2   gate / trigger
-//   CV In 1      FM index              Main knob    FM index
-//   Knob X       C:M ratio             Knob Y       decay / release
-//   CV Out 2     quantised pitch, calibrated 1V/oct
-//   CV Out 1     gate out, 5 V
-//   Audio Out 1  GBA A button gate       Audio Out 2  GBA B button gate
+// Panel (what each input MEANS is decided on the GBA - see payload/mod.h; this is the factory map):
+//   Pulse In 2   clock (PPQN on the GBA)   Audio In 1   reset        Audio In 2   sample start
+//   CV In 1      voice shift               CV In 2      transpose, 1V/oct
+//   Main knob    layers (track muting)     Knob X       tempo        Knob Y       ROM scrub
+//   CV Out 2     followed track's pitch, calibrated 1V/oct
+//   CV Out 1     followed track's gate, 5 V
+//   Audio Out 1  beat pulse (one per quarter note of the song)
+//   Audio Out 2  loop pulse (each time the song loops)
 //
 // Architecture: ComputerCard's 48 kHz audio/CV loop runs on core 0 (ProcessSample below). The
 // entire GBA link engine runs on core 1 (gba_link_core1) and communicates only through the
-// lock-free GbaShared struct — the audio path is never blocked by the link. This mirrors
+// lock-free GbaShared struct � the audio path is never blocked by the link. This mirrors
 // 96_cathode's core-0/core-1 split for the pulse pins.
 
 #include "ComputerCard.h"
@@ -62,7 +66,8 @@ public:
         // the EEPROM calibration is read by ComputerCard's own constructor, which has already
         // run by the time we get here, and the link sends its first HELLO within milliseconds
         // of being launched below.
-        gGba.caps      = (CVOutsCalibrated() ? GBA_CAP_CVOUT_CAL : 0) | GBA_CAP_AUD_EDGES;
+        gGba.caps      = (CVOutsCalibrated() ? GBA_CAP_CVOUT_CAL : 0) | GBA_CAP_AUD_EDGES
+                       | GBA_CAP_UP_PULSE;
         gGba.patchMask = patch_store_used();
 
         // Core 1 is NOT launched here any more — see StartLink(). The flash lockout has to be
@@ -118,23 +123,23 @@ public:
         gGba.knobs[2] = (uint16_t)KnobVal(Knob::Y);
         gGba.switchPos = (uint8_t)SwitchVal();
 
-        // ---- GBA -> Workshop : the note it is sounding ----
-        // CVOut2MIDINote is CALIBRATED from the module's EEPROM, so the quantised pitch out is
-        // in tune with the rest of the rack without any trimming here. (The CV INPUTS have no
-        // such calibration, which is why the GBA carries a CAL page for the pitch input.)
+        // ---- GBA -> Workshop : the followed track ----
+        // CVOut2MIDINote is CALIBRATED from the module's EEPROM, so the pitch out is in tune with
+        // the rest of the rack without any trimming here. The GBA drops the gate for 3 ms between
+        // legato notes, so an envelope downstream retriggers on every note.
         CVOut2MIDINote(gGba.note);
         CVOut1Millivolts(gGba.noteVel ? 5000 : 0);
 
-        // Audio outs carry the GBA's A and B buttons as gates, so the performance gestures are
-        // patchable by the rest of the rack — mult A into another module's trigger and it follows
-        // your fingers. These are the PHYSICAL buttons, so they track whatever the BTN page has
-        // assigned them to (A is TRIGGER and B is HOLD by default).
-        //
-        // They previously mirrored the gate, which said nothing the rack did not already know:
-        // Audio Out 1 duplicated CV Out 1, and Audio Out 2 echoed whatever was patched into
-        // Pulse In 2 in the first place.
-        AudioOut1((gGba.buttons & GBA_A) ? 2000 : 0);
-        AudioOut2((gGba.buttons & GBA_B) ? 2000 : 0);
+        // ---- the song's beat and loop, as pulses ----
+        // The GBA sends COUNTERS; one pulse per increment. A jump of more than 4 is a resync (the
+        // link just came up, or a song change reset the count), not a burst of real beats, so it
+        // is absorbed silently. A pulse that lands while one is still high simply extends it.
+        PulseFromCounter(gGba.beatCount, lastBeat_, beatPulse_);
+        PulseFromCounter(gGba.loopCount, lastLoop_, loopPulse_);
+        AudioOut1(beatPulse_ ? 2000 : 0);
+        AudioOut2(loopPulse_ ? 2000 : 0);
+        if (beatPulse_) beatPulse_--;
+        if (loopPulse_) loopPulse_--;
 
         // ---- status on the LEDs ----
         // While the link is up these are instrument state. While it is NOT, they become a
@@ -144,11 +149,15 @@ public:
         bool booted = (gGba.state == LinkState::Booted);
         if (booted) {
             LedOn(0, true);
-            LedOn(1, gGba.gate);
-            LedOn(2, gGba.noteVel != 0);
-            LedOn(3, gGba.mode == GBA_MODE_EDIT);
-            LedOn(4, (gGba.page & 1) != 0);            // edit page as a binary pair
-            LedOn(5, (gGba.page & 2) != 0);
+            LedOn(1, gGba.gate);                       // clock input
+            LedOn(2, gGba.noteVel != 0);               // followed track's gate
+            LedOn(3, beatPulse_ != 0 || beatFlash_);   // beat
+            LedOn(4, loopFlash_ != 0);                 // loop
+            LedOn(5, gGba.mode == GBA_MODE_EDIT);
+            if (beatPulse_) beatFlash_ = kFlash;       // stretch a 5 ms pulse into a visible blink
+            else if (beatFlash_) beatFlash_--;
+            if (loopPulse_) loopFlash_ = kFlash * 4;
+            else if (loopFlash_) loopFlash_--;
         } else {
             LedOn(0, (tick_ >> 12) & 1);               // blinking: not booted
             uint32_t p = gba_mb_progress;
@@ -174,7 +183,21 @@ public:
     }
 
 private:
+    static constexpr uint32_t kPulse = 240;           // 5 ms at 48 kHz
+    static constexpr uint32_t kFlash = 2400;          // 50 ms
+
+    static void PulseFromCounter(uint8_t now, uint8_t &last, uint32_t &pulse)
+    {
+        uint8_t d = (uint8_t)(now - last);
+        if (d == 0) return;
+        last = now;
+        if (d <= 4) pulse = kPulse;
+    }
+
     uint32_t tick_ = 0;
+    uint8_t  lastBeat_ = 0, lastLoop_ = 0;
+    uint32_t beatPulse_ = 0, loopPulse_ = 0;
+    uint32_t beatFlash_ = 0, loopFlash_ = 0;
 };
 
 int main()

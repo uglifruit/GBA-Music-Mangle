@@ -286,6 +286,11 @@ void gba_link_core1(const uint8_t *payload, uint32_t payload_size)
                 break;
             }
 
+            case GBA_UP_PULSE:
+                gGba.beatCount = (uint8_t)(GBA_UP_DATA(reply) >> 8);
+                gGba.loopCount = (uint8_t)(GBA_UP_DATA(reply) & 0xFF);
+                break;
+
             case GBA_UP_PARAM:
                 break;                          // reserved
             default:

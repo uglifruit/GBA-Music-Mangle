@@ -62,6 +62,10 @@ struct GbaShared {
     volatile uint8_t   page      = 0;    // edit page the GBA is showing
     volatile uint8_t   mode      = 0;    // GBA_MODE_PLAY / GBA_MODE_EDIT
     volatile uint8_t   flags     = 0;    // GBA_FLAG_*
+    // The song's beat and loop, as wrapping COUNTERS (GBA_UP_PULSE): core 0 fires one pulse per
+    // increment on Audio Out 1 / Audio Out 2, so a lost word delays a pulse instead of losing it.
+    volatile uint8_t   beatCount = 0;
+    volatile uint8_t   loopCount = 0;
     volatile uint32_t  rxSeq     = 0;    // increments on each well-formed reply (liveness)
     volatile uint32_t  rxBad     = 0;    // replies rejected by the tag check
     volatile LinkState state     = LinkState::Idle;

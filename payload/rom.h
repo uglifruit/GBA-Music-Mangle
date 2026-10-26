@@ -16,8 +16,10 @@
 #define ROM_MAX  0x02000000u           // 32 MB, the largest a cart can map
 
 #ifdef HOST
-extern const uint8_t *g_romHost;       // ROM_MAX bytes, padded past the image with open-bus values
-#define ROM_PTR(a) ((const uint8_t *)(g_romHost + ((uint32_t)(a) - ROM_BASE)))
+// The host harness (tools/pcplay) defines this, and checks every cart read against the image: that
+// is how its fuzz run proves the engine never strays outside the cart, whatever the mangles do.
+const uint8_t *host_rom_ptr(uint32_t a);
+#define ROM_PTR(a) host_rom_ptr((uint32_t)(a))
 #else
 #define ROM_PTR(a) ((const uint8_t *)(uintptr_t)(a))
 #endif

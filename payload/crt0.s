@@ -51,8 +51,8 @@ _headerstart:
 
     .space 156, 0x00                @ 0x04: Nintendo logo (gbafix fills this)
 
-    .byte 'G','B','A','F','M','V','O','I','C','E',' ',' '   @ 0xA0 title (12)
-    .byte 'C','G','F','M'                                   @ 0xAC game code (4)
+    .byte 'G','B','A','C','A','R','T','P','L','A','Y',' '   @ 0xA0 title (12)
+    .byte 'C','G','M','P'                                   @ 0xAC game code (4)
     .byte '0','0'                                           @ 0xB0 maker code (2)
     .byte 0x96                                              @ 0xB2 fixed
     .byte 0x00                                              @ 0xB3 main unit
@@ -99,13 +99,13 @@ _start_cart:
     @ IWRAM (system) stack. NOT the conventional 0x03007F00: the BIOS hands our serial IRQ
     @ handler the IRQ stack at 0x03007FA0, and at 0x03007F00 that leaves it only 160 bytes
     @ before it collides with this one. link_pump() calls two levels deeper than a typical
-    @ handler, so we move ours down and give the IRQ stack 416 bytes instead. The FM voice's
+    @ handler, so we move ours down and give the IRQ stack 416 bytes instead. The payload's
     @ IWRAM sections start at the BOTTOM of IWRAM and are a few KB, so the move still costs
-    @ nothing. The IRQ stack now also carries the audio path (dispatcher -> DMA handler -> FM
-    @ render, about 120 bytes deep at most), which is the other reason to keep those 416 bytes.
+    @ nothing. The IRQ stack now also carries the audio path (dispatcher -> DMA handler -> the
+    @ sample mixer, about 120 bytes deep at most), which is the other reason to keep those 416 bytes.
     ldr sp, =0x03007E00
 
-    @ Copy .iwram — the audio interrupt, the FM renderer and the sine table — from its load
+    @ Copy .iwram — the audio interrupt, the sample mixer and the scan loop — from its load
     @ address inside the image to IWRAM, where it is linked to run. Multiboot can only place the
     @ image in EWRAM, so this is the only way code gets into the fast memory. The copy fills
     @ IWRAM from the bottom and the stacks live at the top, so nothing in use is overwritten.
