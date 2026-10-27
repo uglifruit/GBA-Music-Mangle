@@ -28,6 +28,8 @@ extern uint32_t g_romSize;             // detected image size in bytes (0 = no c
 extern uint32_t g_romEnd;              // ROM_BASE + g_romSize
 extern char     g_romTitle[13];        // header title, NUL-terminated, unprintables as '.'
 extern char     g_romCode[5];          // 4-letter game code
+extern uint8_t  g_romVersion;          // header 0xBC: the software version (revisions differ here)
+extern uint8_t  g_romCheck;            // header 0xBD: the header checksum (complement)
 
 // Wait states. FAST (3/1 + prefetch) is what nearly every game runs at; SAFE (4/2) is the BIOS
 // default and works with anything.
@@ -37,6 +39,11 @@ void rom_set_speed(int speed);
 
 // Detect the size, read the header. Returns 0 if no cartridge seems to be present.
 int rom_init(void);
+
+// A 16-bit fingerprint of the cart (game code, version, header checksum), never 0 with a cart in.
+// Saved patches carry it so boot can find the slot saved on this cart (GBA_OP_SLOT_TAG); it only
+// PICKS a slot, the full identity is checked after loading.
+uint16_t rom_cart_tag(void);
 
 // True if [addr, addr+len) lies entirely inside the image.
 static inline int rom_ok(uint32_t addr, uint32_t len)

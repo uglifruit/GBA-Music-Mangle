@@ -427,14 +427,19 @@ static void btn_draw(void)
 
 // ---- BASE -------------------------------------------------------------------------------------
 
-#define BASE_ROWS 11
+#define BASE_ROWS    20
+#define BASE_VISIBLE 11                  // rows on screen; the window follows the cursor
 static const uint8_t s_baseDest[BASE_ROWS] = {
     DEST_VSHIFT, DEST_TABLE, DEST_START, DEST_SCRUB, DEST_LAYERS, DEST_SOLO,
     DEST_TRANS, DEST_PITCH, DEST_TEMPO, DEST_REVERSE, DEST_CRUSH,
+    DEST_ATTACK, DEST_DECAY, DEST_SUSTAIN, DEST_RELEASE, DEST_LENGTH, DEST_REVERB,
+    DEST_VIBRATO, DEST_TREMOLO, DEST_LFO,
 };
 static const char *s_baseUnit[BASE_ROWS] = {
     "PROGRAMS", "BYTES", "/128", "KNOB", "STRIPPED", "", "SEMITONES", "CENTS", "KNOB", "/128", "STEPS",
+    "KNOB", "KNOB", "KNOB", "KNOB", "KNOB", "LEVEL", "DEPTH", "DEPTH", "KNOB",
 };
+static int s_baseTop;
 
 static void base_keys(uint16_t k)
 {
@@ -451,12 +456,16 @@ static void base_keys(uint16_t k)
 static void base_draw(void)
 {
     char t[40];
-    for (int r = 0; r < BASE_ROWS; r++) {
+    int cur = s_cursor[PAGE_BASE];
+    if (cur < s_baseTop) s_baseTop = cur;
+    if (cur >= s_baseTop + BASE_VISIBLE) s_baseTop = cur - BASE_VISIBLE + 1;
+    for (int r = 0; r < BASE_VISIBLE; r++) {
+        int row = s_baseTop + r;
         int y = 16 + r * 11;
-        int cur = (r == s_cursor[PAGE_BASE]);
-        int dest = s_baseDest[r];
+        int sel = (row == cur);
+        int dest = s_baseDest[row];
         int v = g_patch.base[dest];
-        field(r * 3 + 0, 4, y, 13, dest_name[dest], cur ? COL_SEL : COL_DIM);
+        field(r * 3 + 0, 4, y, 13, dest_name[dest], sel ? COL_SEL : COL_DIM);
         if (dest == DEST_SOLO) {
             if (v == 0) put_str(t, 0, "OFF");
             else { int a = put_str(t, 0, "TRACK "); put_dec(t, a, (uint32_t)v, 1); }
@@ -465,9 +474,12 @@ static void base_draw(void)
         } else {
             put_dec(t, 0, (uint32_t)v, 1);
         }
-        field(r * 3 + 1, 88, y, 8, t, cur ? COL_TITLE : v ? COL_MID : COL_DIM);
-        field(r * 3 + 2, 142, y, 9, s_baseUnit[r], COL_DIM);
+        field(r * 3 + 1, 88, y, 8, t, sel ? COL_TITLE : v ? COL_MID : COL_DIM);
+        field(r * 3 + 2, 142, y, 9, s_baseUnit[row], COL_DIM);
     }
+    // Where the window is: more above, more below.
+    field(59, 214, 16, 2, s_baseTop > 0 ? "^" : "", COL_DIM);
+    field(58, 214, 16 + (BASE_VISIBLE - 1) * 11, 2, s_baseTop + BASE_VISIBLE < BASE_ROWS ? "v" : "", COL_DIM);
     field(60, 4, SCREEN_H - 10, 38, "LEFT/RIGHT CHANGE  A ZERO  L/R PAGE", COL_DIM);
 }
 
@@ -639,10 +651,10 @@ static void cal_draw(void)
 {
     char t[40];
     int a, y = 16;
-    static const char *meth[3] = { "NONE", "SIGNATURE", "HEURISTIC" };
+    static const char *meth[4] = { "NONE", "SIGNATURE", "HEURISTIC", "SAVED SLOT" };
 
     a = put_str(t, 0, "SCAN   ");
-    a = put_str(t, a, meth[g_scan.method < 3 ? g_scan.method : 0]);
+    a = put_str(t, a, meth[g_scan.method < 4 ? g_scan.method : 0]);
     a = put_str(t, a, "  TABLES ");
     put_dec(t, a, g_tableCount, 1);
     field(0, 4, y, 36, t, COL_MID); y += 10;
@@ -686,6 +698,12 @@ static void cal_draw(void)
     a = put_dec(t, a, g_dspPeak >> 4, 1);
     put_str(t, a, "%");
     field(7, 4, y, 36, t, (g_dspPeak >> 4) > 80 ? COL_WAIT : COL_MID); y += 10;
+    a = put_str(t, 0, "SVC    ");
+    a = put_dec(t, a, g_svcAvg >> 4, 1);
+    a = put_str(t, a, "% PEAK ");
+    a = put_dec(t, a, g_svcPeak >> 4, 1);
+    put_str(t, a, "%");
+    field(9, 4, y, 36, t, COL_MID); y += 10;
     a = put_str(t, 0, "VOICES ");
     int on = 0;
     for (int i = 0; i < PL_DS_MAX; i++) if (g_ds[i].status & SF_ON) on++;
@@ -760,8 +778,20 @@ void ui_scan_begin(void)
         a = put_dec(t, 0, g_romSize >> 20, 1);
         put_str(t, a, " MB");
         text_centre(62, t, COL_DIM, 1);
-        text_centre(82, "SCANNING FOR MUSIC", COL_WAIT, 1);
     }
+}
+
+void ui_scan_status(const char *line1, const char *line2)
+{
+    rect(0, 80, SCREEN_W, 8, COL_BG);
+    rect(0, 108, SCREEN_W, 8, COL_BG);
+    text_centre(82, line1, COL_WAIT, 1);
+    if (line2[0]) text_centre(108, line2, COL_DIM, 1);
+}
+
+void ui_mem_select(int slot)
+{
+    if (slot >= 0 && slot < GBA_PATCH_SLOTS) s_memSlot = (uint8_t)slot;
 }
 
 void ui_scan_progress(uint32_t done256)
@@ -783,7 +813,7 @@ static void engine_line(char *t)
     }
 }
 
-void ui_scan_result(void)
+void ui_scan_result(int slot)
 {
     char t[40];
     rect(0, 80, SCREEN_W, 54, COL_BG);
@@ -805,5 +835,11 @@ void ui_scan_result(void)
             put_str(t, a, " TABLES");
         }
         text_centre(82, t, COL_OK, 1);
+        if (slot >= 0 && slot < GBA_PATCH_SLOTS) {
+            a = put_str(t, 0, "FROM SAVED SLOT ");
+            put_dec(t, a, (uint32_t)slot + 1, 1);
+            text_centre(94, t, COL_MID, 1);
+            text_centre(106, "SET > RESCAN CART SCANS IT AGAIN", COL_DIM, 1);
+        }
     }
 }

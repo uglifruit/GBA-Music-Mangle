@@ -208,6 +208,16 @@ Port `ply_note`'s allocation exactly, with these changes:
 | `pitch` | §5.4.1. |
 | `tempoU` | Used only in `player_tempo_i()`. |
 
+**Added after delivery (2026-10-27).** The hooks below were added to the delivered player, by us,
+not by the original developer. They are part of the contract now.
+
+| Field | Exact behaviour |
+|---|---|
+| `attack`, `decay`, `sustain`, `release` | −2048..2047, 0 = as written. Read **live**, wherever an envelope reads its rate: `ds_envelope()` and every read in `cgb.c` go through `pl_env(c, PL_ENV_*)`, so a change reaches notes already sounding. `pl_env` moves the channel's value \|v\|/2048 of the way to one end of its range, rounded so full scale reaches it. DirectSound: attack toward 1 (slower) for v > 0, toward 255 (instant) for v < 0; decay, release 0..255 and sustain 0..255 toward 255 for v > 0, toward 0 for v < 0. PSG: attack, decay and release 0..7 and sustain 0..15, toward the top for v > 0. |
+| `gate` | Note length at note-on, −2048..2047: ×(1 + 3v/2048) up to ×4, or ×(1 − 3\|v\|/8192) down to ×¼; clamped 1..255. A gate time of 0 (a `TIE`) is left alone. It applies to the channel's `gateTime` and to the follower's `gateLeft`. |
+| `reverb` | −127..127, added to the song header's reverb (`s_songReverb`, 0..127). `g_mixReverb` = the clamped sum, set at `player_start()` and on every `player_update()`. The mixer writes its echo ring even when the reverb is 0, so turning it up live starts from what just played. |
+| `vibrato`, `tremolo`, `lfoSpeed` | One global LFO, stepped in `player_frame()` (so its rate does not follow the clock): phase += `lfoSpeed`, a triangle −128..126. Vibrato adds `16 × ((wave × vibrato) >> 6)` to every track's pitch sum in `track_vol_pitch()` (m4a's MODT 0 scale). Tremolo scales the volume `x` by `(128 + ((wave × tremolo) >> 6)) / 128`, clamped to 255 (MODT 1). Depths are 0..63, and tracks are flagged only when an output changes. |
+
 ### 5.8 Follower fields (for the UI and the CV output)
 
 At **every note command**, whether or not a channel was obtained:

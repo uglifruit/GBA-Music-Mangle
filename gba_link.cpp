@@ -119,6 +119,7 @@ void gba_link_core1(const uint8_t *payload, uint32_t payload_size)
         uint8_t  lastSwitch     = 0xFF;
         uint32_t lastAud        = 0xFFFFFFFFu;  // last GBA_OP_AUDEDGE argument sent
         uint32_t audSeq         = 0;            // seq it was sent at
+        uint32_t tagIx          = 0;            // next slot whose cart tag goes out
 
         // ---- patch transfer state ----
         // A save arrives as a stream of indexed bytes; the seen-bitmap is what lets the host tell
@@ -200,6 +201,13 @@ void gba_link_core1(const uint8_t *payload, uint32_t payload_size)
                 // That costs an eighth of the stream and still leaves each CV pair above 400 Hz.
                 word = gba_knob_pack(knobIx, gGba.knobs[knobIx]);
                 knobIx = (knobIx + 1u) % 3u;
+            } else if ((seq & (seq < 2048u ? 0xFu : 0x3Fu)) == 0xCu) {
+                // Each slot's cart tag in turn, so the GBA can find the slot saved on this cart at
+                // boot without loading every slot (GBA_OP_SLOT_TAG). Fast for the first couple of
+                // seconds, when the GBA is waiting for them, then slow. 0xC never meets a knob
+                // (7 mod 8) or any of the other periodic slots above and below, which are all 0 mod 16.
+                word = gba_control_pack(GBA_OP_SLOT_TAG, ((uint32_t)tagIx << 16) | gGba.slotTag[tagIx]);
+                tagIx = (tagIx + 1u) & 15u;
             } else if ((seq & 0x1FFu) == 0x100u) {
                 // Which slots hold a patch, so the GBA's store page can show free from used
                 // without asking. Cheap, and it keeps the display honest after a save.
@@ -270,6 +278,7 @@ void gba_link_core1(const uint8_t *payload, uint32_t payload_size)
                         ackLeft = 4;
                         rxSlot  = -1;
                         gGba.patchMask = patch_store_used();
+                        gGba.slotTag[slot & 15u] = patch_store_tag((int)slot);
                     }
                 } else if (req == GBA_REQ_LOAD && txSlot < 0) {
                     txLen = GBA_PATCH_SLOT_BYTES;

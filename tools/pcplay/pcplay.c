@@ -11,6 +11,8 @@
 //   pcplay ROM [--songs] [--song N] [--secs S] [--out FILE.wav] [--mute MASK]
 //              [--voice-shift N] [--table BYTES] [--start 0..255] [--scrub BYTES]
 //              [--reverse 0..255] [--transpose SEMIS] [--tempo PCT]
+//              [--attack|--decay|--sustain|--release|--length -2047..2047] [--reverb -127..127]
+//              [--vibrato 0..63] [--tremolo 0..63] [--lfo 1..255]
 //   pcplay ROM --fuzz N        every song, N seconds each, random mangles every 250 ms
 //   --songtable T (1-based) and --list 0/1/2 (all/music/sfx) pick the song list first, as the SET page does
 //   (default: table 1, MUSIC if it has any music, else ALL)
@@ -99,6 +101,15 @@ static void render(Render *r, uint32_t blocks, int fuzz)
             g_mods.pitch         = (int16_t)((int)(rnd() % 12289) - 6144);
             g_mods.tempoU        = (uint16_t)(64 + rnd() % 960);
             g_plMaxChans         = (uint8_t)(1 + rnd() % PL_DS_MAX);
+            g_mods.attack        = (int16_t)((int)(rnd() % 4095) - 2047);
+            g_mods.decay         = (int16_t)((int)(rnd() % 4095) - 2047);
+            g_mods.sustain       = (int16_t)((int)(rnd() % 4095) - 2047);
+            g_mods.release       = (int16_t)((int)(rnd() % 4095) - 2047);
+            g_mods.gate          = (int16_t)((int)(rnd() % 4095) - 2047);
+            g_mods.reverb        = (int8_t)((int)(rnd() % 255) - 127);
+            g_mods.vibrato       = (uint8_t)(rnd() % 64);
+            g_mods.tremolo       = (uint8_t)(rnd() % 64);
+            g_mods.lfoSpeed      = (uint8_t)(1 + rnd() % 255);
         }
         tickAcc += AUDIO_BLOCK * player_tempo_i() * 408u;
         for (int n = 0; tickAcc >= TICK_ONE && n < 8; n++) { tickAcc -= TICK_ONE; player_tick(); }
@@ -165,7 +176,7 @@ int main(int argc, char **argv)
     if (flag(argc, argv, "--songtable") || flag(argc, argv, "--list")) {
         scan_select((int)argl(argc, argv, "--songtable", 1) - 1, (int)argl(argc, argv, "--list", g_listMode));
     }
-    static const char *meth[3] = { "NONE", "SIGNATURE", "HEURISTIC" };
+    static const char *meth[4] = { "NONE", "SIGNATURE", "HEURISTIC", "SAVED" };
     static const char *list[3] = { "all", "music", "sfx" };
     printf("%s [%s]  %u KB  scan %s  table %u/%u at 0x%08X  %s: %u songs  rate %u\n", g_romTitle,
            g_romCode, g_romSize >> 10, meth[g_scan.method], g_tableIx + 1u, g_tableCount, g_scan.songTable,
@@ -212,6 +223,16 @@ int main(int argc, char **argv)
     g_mods.reverseChance = (uint8_t)argl(argc, argv, "--reverse", 0);
     g_mods.pitch         = (int16_t)(argl(argc, argv, "--transpose", 0) * 256);
     g_mods.tempoU        = (uint16_t)(argl(argc, argv, "--tempo", 100) * 256 / 100);
+    // The sound hooks, in g_mods' own units (see player.h).
+    g_mods.attack        = (int16_t)argl(argc, argv, "--attack", 0);
+    g_mods.decay         = (int16_t)argl(argc, argv, "--decay", 0);
+    g_mods.sustain       = (int16_t)argl(argc, argv, "--sustain", 0);
+    g_mods.release       = (int16_t)argl(argc, argv, "--release", 0);
+    g_mods.gate          = (int16_t)argl(argc, argv, "--length", 0);
+    g_mods.reverb        = (int8_t)argl(argc, argv, "--reverb", 0);
+    g_mods.vibrato       = (uint8_t)argl(argc, argv, "--vibrato", 0);
+    g_mods.tremolo       = (uint8_t)argl(argc, argv, "--tremolo", 0);
+    g_mods.lfoSpeed      = (uint8_t)argl(argc, argv, "--lfo", 22);
 
     double secs = (double)argl(argc, argv, "--secs", 10);
     Render r = { 0 };

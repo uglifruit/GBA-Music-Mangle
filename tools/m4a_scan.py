@@ -179,21 +179,37 @@ def find_heuristic(rom, sniff):
     return [a for a, _ in best]
 
 
-def find_sound_mode(rom, near):
-    lo = near - 0x2000 if near > ROM_BASE + 0x2000 else ROM_BASE
-    hi = min(near + 0x2000, rom.end)
+def find_back(rom, pos, length, pats):
+    """saptapper's find_backwards: the nearest 4-aligned match in [pos - length, pos), or 0."""
+    a = pos - 4
+    while a + length >= pos and a >= ROM_BASE:
+        for pat in pats:
+            if rom.ok(a, len(pat)) and rom.data[a - ROM_BASE:a - ROM_BASE + len(pat)] == pat:
+                return a
+        a -= 4
+    return 0
+
+
+PUSH_LR = [bytes([0x00, 0xb5])]                                        # push {lr}
+INIT_FN = [bytes([0x70, 0xb5, 0x14, 0x48]), bytes([0xf0, 0xb5, 0x47, 0x46])]
+
+
+def find_sound_mode(rom, select):
+    """m4aSoundInit's m4aSoundMode literal, found by saptapper's route (scan.c find_sound_mode)."""
+    main_fn = find_back(rom, select, 0x20, PUSH_LR)
+    init_fn = find_back(rom, main_fn, 0x100, INIT_FN) if main_fn else 0
+    lo = init_fn if init_fn else (select - 0x200 if select > ROM_BASE + 0x200 else ROM_BASE)
+    hi = main_fn if init_fn else select
+    found = 0
     a = lo & ~3
     while a + 4 <= hi:
-        if near <= a < near + 48:
-            a += 4
-            continue
         w = rom.u32(a)
         da, fq, mv, ch = (w >> 20) & 0xF, (w >> 16) & 0xF, (w >> 12) & 0xF, (w >> 8) & 0xF
         if (w >> 24) == 0 and 8 <= da <= 0xB and 1 <= fq <= 12 and mv >= 4 and 1 <= ch <= 12 \
                 and ((w & 0xFF) == 0 or (w & 0x80)):
-            return w
+            found = w
         a += 4
-    return 0
+    return found
 
 
 def song_list(rom, table):

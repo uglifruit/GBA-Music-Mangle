@@ -119,6 +119,22 @@ int main(int argc, char **argv)
     // 2c. The scan starts on the MUSIC list (the test cart has effects on players 1 and 2).
     CHECK(g_listMode == LIST_MUSIC, "default list %u, want MUSIC", g_listMode);
 
+    // 2d. Knob X (TEMPO) roughly at noon is the song's own tempo; the ends still reach x0.25 / ~x4.
+    for (int o = -190; o <= 190; o += 38) {
+        g_knob[1] = (uint16_t)(2048 + o); g_knob[2] = (uint16_t)(2048 + o); update();
+        CHECK(g_mods.tempoU == 0x100 && g_mods.romScrub == 0, "knobs %+d off noon: tempo %u scrub %ld",
+              o, g_mods.tempoU, (long)g_mods.romScrub);
+    }
+    g_knob[1] = 0; update();
+    CHECK(g_mods.tempoU <= 70, "knob X full left: tempo %u, want ~64 (x0.25; depth 63 is 63/64 scale)", g_mods.tempoU);
+    g_knob[1] = 4095; update();
+    CHECK(g_mods.tempoU >= 1000, "knob X full right: tempo %u, want ~1024 (x4)", g_mods.tempoU);
+    neutral();
+
+    // 2e. Each table's rate is m4aSoundInit's own sound mode, not the decoy before it (scan.c).
+    CHECK(g_tableCount == 2 && g_tables[0].gameRate == 13379 && g_tables[1].gameRate == 18157,
+          "rates %u / %u, want 13379 / 18157", g_tables[0].gameRate, g_tables[1].gameRate);
+
     // 3. Main knob full right strips layers down to track 1 (song 0 has 2 tracks).
     g_knob[0] = 4095; update();
     CHECK(g_mods.mute == 0x0002, "MAIN full: mute 0x%04X, want 0x0002", g_mods.mute);
@@ -175,14 +191,93 @@ int main(int argc, char **argv)
     CHECK(g_plTicks == 0, "switch down: ticks %u, want 0 (restarted)", g_plTicks);
     g_switch = 1; update();
 
+    // 8b. The sound destinations: a BASE value reaches its hook; bypass zeroes it.
+    neutral();
+    g_patch.base[DEST_RELEASE] = 64; g_patch.base[DEST_VIBRATO] = 10; g_patch.base[DEST_REVERB] = -20;
+    update();
+    CHECK(g_mods.release == 1024 && g_mods.vibrato == 10 && g_mods.reverb == -20 && g_mods.lfoSpeed == 22,
+          "BASE release/vibrato/reverb: %d %u %d lfo %u", g_mods.release, g_mods.vibrato, g_mods.reverb,
+          g_mods.lfoSpeed);
+    g_switch = 2; update();
+    CHECK(g_mods.release == 0 && g_mods.vibrato == 0 && g_mods.reverb == 0, "bypass clears the sound hooks");
+    g_switch = 1; update();
+    {   // pl_env: release +full on a DS voice goes to 255, -full to 0; a PSG voice tops out at 7.
+        Chan c = { 0 };
+        c.release = 200; c.type = 0;
+        g_mods.release = 2047; unsigned up = pl_env(&c, PL_ENV_RELEASE);
+        g_mods.release = -2047; unsigned dn = pl_env(&c, PL_ENV_RELEASE);
+        c.type = 1; c.release = 3; g_mods.release = 2047; unsigned psg = pl_env(&c, PL_ENV_RELEASE);
+        c.type = 0; c.attack = 255; g_mods.attack = 2047; unsigned att = pl_env(&c, PL_ENV_ATTACK);
+        CHECK(up >= 254 && dn <= 1 && psg == 7 && att <= 2, "pl_env: rel %u/%u psg %u attack %u", up, dn, psg, att);
+        update();
+    }
+
+    // 8c. CLEAR MANGLES (here on B): BASE values and latches go, TEMPO / TRANSPOSE / FINE PITCH stay.
+    neutral();
+    g_patch.base[DEST_VSHIFT] = 5; g_patch.base[DEST_RELEASE] = 30; g_patch.base[DEST_TRANS] = 7;
+    g_patch.base[DEST_TEMPO] = 20; g_patch.base[DEST_PITCH] = 15;
+    g_patch.btn[0].dest = DEST_CRUSH;   g_patch.btn[0].mode = BTN_LATCH; g_patch.btn[0].amount = 63;
+    g_patch.btn[1].dest = DEST_CLEAR;
+    g_perform = 1;
+    press(K_A);
+    CHECK(g_btnLatch & 1, "A latched CRUSH before the clear");
+    press(K_B); update();
+    CHECK(g_patch.base[DEST_VSHIFT] == 0 && g_patch.base[DEST_RELEASE] == 0 && !(g_btnLatch & 1)
+          && g_crushHold == 1, "CLEAR: vsh %d rel %d latch %u", g_patch.base[DEST_VSHIFT],
+          g_patch.base[DEST_RELEASE], g_btnLatch);
+    CHECK(g_patch.base[DEST_TRANS] == 7 && g_patch.base[DEST_TEMPO] == 20 && g_patch.base[DEST_PITCH] == 15,
+          "CLEAR keeps transpose %d tempo %d pitch %d", g_patch.base[DEST_TRANS], g_patch.base[DEST_TEMPO],
+          g_patch.base[DEST_PITCH]);
+    mod_default_patch();
+    neutral();
+
     // 9. A v1 patch is migrated: version 2, factory buttons, zero BASE.
     Patch p;
     mod_default_patch();
     memcpy(&p, &g_patch, sizeof p);
     memset(&p.table, 0, sizeof p - offsetof(Patch, table));
     p.version = 1;
-    CHECK(mod_patch_accept(&p) == 1 && p.version == 2, "v1 patch accepted and migrated (version %u)", p.version);
+    CHECK(mod_patch_accept(&p) == 1 && p.version == 4, "v1 patch accepted and migrated (version %u)", p.version);
     CHECK(p.btn[0].dest == DEST_REVERSE && p.btn[3].dest == DEST_VSHIFT, "v1 migration: factory buttons");
+    // A v2 patch: BASE in the old place, nothing after the buttons. It must land in base[].
+    mod_default_patch();
+    memcpy(&p, &g_patch, sizeof p);
+    memset(p.base, 0, sizeof p.base);
+    p.version = 2; p.baseV2[DEST_VSHIFT] = 9; p.baseV2[DEST_TRANS] = -3;
+    CHECK(mod_patch_accept(&p) == 1 && p.version == 4 && p.base[DEST_VSHIFT] == 9 && p.base[DEST_TRANS] == -3
+          && p.base[DEST_RELEASE] == 0, "v2 patch migrated: vsh %d trn %d", p.base[DEST_VSHIFT], p.base[DEST_TRANS]);
+    // 10. Patch v4: a save records the cart and its tables; boot can install them without a scan.
+    mod_default_patch();
+    mod_patch_prepare_save();
+    CHECK(g_patch.cartTag == rom_cart_tag() && g_patch.cartTag != 0 && g_patch.tableCount == 2
+          && g_patch.tableAddr[0] == g_tables[0].songTable && g_patch.tableRate[1] == 18157,
+          "save records tag 0x%04X tables %u (0x%08X, rate %u)", g_patch.cartTag, g_patch.tableCount,
+          g_patch.tableAddr[0], g_patch.tableRate[1]);
+    CHECK(mod_patch_is_this_cart(&g_patch), "the saved patch is this cart's");
+    memcpy(&p, &g_patch, sizeof p);
+    p.romCheck ^= 1;
+    CHECK(!mod_patch_is_this_cart(&p), "another revision (checksum differs) is not this cart");
+    {
+        int songsBefore = g_songCount;
+        CHECK(scan_install(g_patch.tableCount, g_patch.tableAddr, g_patch.tableRate) == 2
+              && g_scan.method == SCAN_SAVED && g_songCount == songsBefore && g_tables[1].gameRate == 18157,
+              "install: %d tables, method %u, %u songs (scan had %d)", g_tableCount, g_scan.method,
+              g_songCount, songsBefore);
+        uint32_t bad[2] = { g_patch.tableAddr[0] + 0x40000u, g_patch.tableAddr[1] };   // a stale address
+        uint16_t rate[2] = { 13379, 18157 };
+        CHECK(scan_install(2, bad, rate) == 1 && g_scan.songTable == g_patch.tableAddr[1],
+              "a stale table is dropped, the good one kept (%d)", g_tableCount);
+        uint32_t none[1] = { 0x08000100u };
+        CHECK(scan_install(1, none, rate) == 0 && g_scan.method == SCAN_NONE, "no good table: scan for real");
+        scan_run(NULL);
+    }
+    memcpy(&p, &g_patch, sizeof p);
+    memset(&p.cartTag, 0, sizeof p - offsetof(Patch, cartTag));
+    p.version = 3;
+    CHECK(mod_patch_accept(&p) == 1 && p.version == 4 && p.tableCount == 0 && !mod_patch_is_this_cart(&p),
+          "v3 patch migrated with no cart (version %u)", p.version);
+    CHECK(offsetof(Patch, cartTag) == GBA_PATCH_TAG_OFFSET, "cartTag at the host's offset");
+
     p.magic = 0x464D;                                     // the FM card's magic
     CHECK(mod_patch_accept(&p) == 0, "an FM patch must be rejected");
     CHECK(sizeof(Patch) <= GBA_PATCH_SLOT_BYTES, "Patch %u bytes fits the slot", (unsigned)sizeof(Patch));

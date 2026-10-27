@@ -23,7 +23,8 @@
 #include <cstdint>
 #include "gba_proto.h"
 
-// True if the slot holds a patch whose magic and version we recognise; `out` gets its bytes.
+// True if the slot has been written (is not erased); `out` gets its bytes. Whether those bytes are
+// a patch this program understands is the GBA's call, not ours - see slot_valid().
 bool patch_store_load(int slot, uint8_t *out);
 
 // Read-modify-erase-rewrite of the whole sector. Returns false if the flash operation could not
@@ -32,3 +33,6 @@ bool patch_store_save(int slot, const uint8_t *in);
 
 // Which slots currently hold something, as a bitmask. Cheap: it only reads XIP.
 uint16_t patch_store_used(void);
+// The slot's cart tag (the two bytes at GBA_PATCH_TAG_OFFSET, little-endian), or 0 if the slot is
+// empty. Read straight from flash; the GBA judges what it means (see GBA_OP_SLOT_TAG).
+uint16_t patch_store_tag(int slot);

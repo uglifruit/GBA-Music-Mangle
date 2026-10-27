@@ -72,6 +72,7 @@ struct GbaShared {
     volatile uint8_t   lastError = 0;    // MultibootResult of the last failed attempt
     volatile uint32_t  linkHz    = 0;    // SCK rate that multiboot actually succeeded at
     volatile uint16_t  patchMask = 0;    // which of the 16 flash slots hold a patch
+    volatile uint16_t  slotTag[16] = {}; // each slot's cart tag (GBA_OP_SLOT_TAG), 0 = empty
 };
 
 // The single shared instance (defined in gba_link.cpp).

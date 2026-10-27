@@ -53,7 +53,7 @@ static uint32_t udiv32(uint32_t n, uint32_t d)
     return q;
 }
 
-uint32_t clock_now(void)
+IWRAM_CODE uint32_t clock_now(void)
 {
     uint16_t t = REG_TM2CNT_L;
     s_time += (uint16_t)(t - s_t2Last);
@@ -89,7 +89,7 @@ static uint32_t interval_for(uint32_t period)
     }
 }
 
-static int ext_active(uint32_t now)
+static inline __attribute__((always_inline)) int ext_active(uint32_t now)
 {
     if (g_clkMode == CLK_INT) return 0;
     if (g_clkMode == CLK_EXT) return 1;
@@ -125,6 +125,10 @@ void clock_pulse(void)
     uint32_t tpp = ticks_per_pulse();
     if (s_havePeriod) {
         s_interval = interval_for(s_period);
+        // BPM = 60 x 16384 / (period x PPQN). Here, once a pulse, not in the 1 kHz service: udiv32
+        // is a 32-step loop.
+        uint32_t ppqn = clk_ppqn[g_clkPpqnIx < CLK_PPQN_COUNT ? g_clkPpqnIx : 2];
+        g_clkBpm = (uint16_t)udiv32(60u * T2_HZ, s_period * ppqn);
     } else {
         // No period yet (the first pulse after a stop): assume the song's own tempo for the spread.
         // One tick at tempoI is 16384 x 150 / (tempoI x 59.7275) = 41148 / tempoI counts.
@@ -157,7 +161,9 @@ void clock_reset(void)
     }
 }
 
-void clock_service(void)
+// IWRAM, like mod_update: it runs every millisecond. player_tick() and player_frame() it calls
+// from EWRAM - they run at the song's tick rate and 60 Hz, not every call.
+IWRAM_CODE void clock_service(void)
 {
     uint32_t now = clock_now();
     uint32_t dt = now - s_svcLast;
@@ -180,11 +186,6 @@ void clock_service(void)
             player_tick();
             s_extDue--;
             s_extNext += s_interval;
-        }
-        if (s_havePeriod) {
-            // BPM = 60 x 16384 / (period x PPQN)
-            uint32_t ppqn = clk_ppqn[g_clkPpqnIx < CLK_PPQN_COUNT ? g_clkPpqnIx : 2];
-            g_clkBpm = (uint16_t)udiv32(60u * T2_HZ, s_period * ppqn);
         }
     } else {
         g_clkExtLive = 0;

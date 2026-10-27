@@ -29,7 +29,12 @@ void ui_frame(void);                  // one frame: handle buttons, redraw what 
 // The boot / rescan screen.
 void ui_scan_begin(void);
 void ui_scan_progress(uint32_t done256);
-void ui_scan_result(void);            // draws the outcome; returns at once
+void ui_scan_status(const char *line1, const char *line2);   // what the boot is doing, under the cart
+void ui_scan_result(int slot);        // draws the outcome; slot = the saved slot booted from, or 0xFF
+void ui_mem_select(int slot);         // put the MEM page's cursor on a slot
 
 // SET page's RESCAN CART calls this; main.c owns the scan flow and sets it.
 extern void (*g_ui_rescan)(void);
+
+// SERVICE LOAD for the CAL page (main.c): the modulator + clock service, percent x 16 of ~1 ms.
+extern volatile uint16_t g_svcAvg, g_svcPeak;

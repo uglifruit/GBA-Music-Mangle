@@ -69,6 +69,7 @@ public:
         gGba.caps      = (CVOutsCalibrated() ? GBA_CAP_CVOUT_CAL : 0) | GBA_CAP_AUD_EDGES
                        | GBA_CAP_UP_PULSE;
         gGba.patchMask = patch_store_used();
+        for (int i = 0; i < 16; i++) gGba.slotTag[i] = patch_store_tag(i);
 
         // Core 1 is NOT launched here any more — see StartLink(). The flash lockout has to be
         // armed on core 0 first, and that has to happen before anything on core 1 could ask for

@@ -9,6 +9,7 @@ uint32_t g_romSize = 0;
 uint32_t g_romEnd  = ROM_BASE;
 char     g_romTitle[13];
 char     g_romCode[5];
+uint8_t  g_romVersion, g_romCheck;
 
 void rom_set_speed(int speed)
 {
@@ -51,6 +52,8 @@ int rom_init(void)
     if (open_bus_at(ROM_BASE) || ROM_PTR(ROM_BASE)[0xB2] != 0x96) {
         g_romTitle[0] = 0;
         g_romCode[0]  = 0;
+        g_romVersion  = 0;
+        g_romCheck    = 0;
         return 0;
     }
 
@@ -66,5 +69,19 @@ int rom_init(void)
 
     copy_text(g_romTitle, ROM_BASE + 0xA0, 12);
     copy_text(g_romCode,  ROM_BASE + 0xAC, 4);
+    g_romVersion = ROM_PTR(ROM_BASE)[0xBC];
+    g_romCheck   = ROM_PTR(ROM_BASE)[0xBD];
     return 1;
+}
+
+uint16_t rom_cart_tag(void)
+{
+    if (!g_romSize) return 0;
+    const uint8_t *h = ROM_PTR(ROM_BASE);
+    uint32_t t = 0x2545u;
+    for (int i = 0xAC; i < 0xB0; i++) t = t * 31u + h[i];
+    t = t * 31u + g_romVersion;
+    t = t * 31u + g_romCheck;
+    t = (t ^ (t >> 16)) & 0xFFFFu;
+    return (uint16_t)(t ? t : 1u);
 }

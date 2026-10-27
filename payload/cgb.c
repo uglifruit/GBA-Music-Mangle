@@ -1,5 +1,6 @@
 // cgb.c — m4a PSG envelopes and register updates; audio.c retains DMA/master ownership.
-// Ported from pret/pokeemerald src/m4a.c, CgbSound/MidiKeyToCgbFreq.
+// Ported from pret/pokeemerald src/m4a.c, CgbSound/MidiKeyToCgbFreq. The envelope values are read
+// through pl_env() (player.c), so the ADSR mangles reach notes already sounding.
 #include "cgb.h"
 #include "player.h"
 #include "rom.h"
@@ -67,7 +68,7 @@ static void cgb_mod_vol(Chan *c)
              l > r && l / 2 >= r ? 0xF0 : 0xFF;
     c->envGoal = (r + l) >> 4;
     if (c->envGoal > 15) c->envGoal = 15;
-    c->sustainGoal = (c->envGoal * c->sustain + 15) >> 4;
+    c->sustainGoal = (c->envGoal * pl_env(c, PL_ENV_SUSTAIN) + 15) >> 4;
     c->pan &= c->panMask;
 }
 
@@ -155,15 +156,15 @@ static void cgb_step(int ch, int prevC15)
                     R8(nrx1) = c->length;
                     R8(nrx3) = (uint32_t)c->wav << 3;
                 init_env_step_time_dir:
-                    envelopeStepTimeAndDir = c->attack + 8;
+                    envelopeStepTimeAndDir = pl_env(c, PL_ENV_ATTACK) + 8;
                     if (c->length)
                         c->n4 = 0x40;
                     else
                         c->n4 = 0x00;
                     break;
                 }
-                c->envCounter = c->attack;
-                if ((int8_t)(c->attack & mask))
+                c->envCounter = pl_env(c, PL_ENV_ATTACK);
+                if ((int8_t)(pl_env(c, PL_ENV_ATTACK) & mask))
                 {
                     c->envVol = 0;
                     goto envelope_step_complete;
@@ -194,12 +195,12 @@ static void cgb_step(int ch, int prevC15)
         else if ((c->status & SF_STOP) && (c->status & SF_ENV))
         {
             c->status &= ~SF_ENV;
-            c->envCounter = c->release;
-            if ((int8_t)(c->release & mask))
+            c->envCounter = pl_env(c, PL_ENV_RELEASE);
+            if ((int8_t)(pl_env(c, PL_ENV_RELEASE) & mask))
             {
                 c->modify |= CGB_MO_VOL;
                 if (ch != 3)
-                    envelopeStepTimeAndDir = c->release | 0;
+                    envelopeStepTimeAndDir = pl_env(c, PL_ENV_RELEASE) | 0;
                 goto envelope_step_complete;
             }
             else
@@ -238,7 +239,7 @@ static void cgb_step(int ch, int prevC15)
                     }
                     else
                     {
-                        c->envCounter = c->release;
+                        c->envCounter = pl_env(c, PL_ENV_RELEASE);
                     }
                 }
                 else if ((c->status & SF_ENV) == SF_SUSTAIN)
@@ -257,7 +258,7 @@ static void cgb_step(int ch, int prevC15)
                     if (envVol <= sustainGoal)
                     {
                     envelope_sustain_start:
-                        if (c->sustain == 0)
+                        if (pl_env(c, PL_ENV_SUSTAIN) == 0)
                         {
                             c->status &= ~SF_ENV;
                             goto envelope_pseudoecho_start;
@@ -273,7 +274,7 @@ static void cgb_step(int ch, int prevC15)
                     }
                     else
                     {
-                        c->envCounter = c->decay;
+                        c->envCounter = pl_env(c, PL_ENV_DECAY);
                     }
                 }
                 else
@@ -283,13 +284,13 @@ static void cgb_step(int ch, int prevC15)
                     {
                     envelope_decay_start:
                         c->status--;
-                        c->envCounter = c->decay;
+                        c->envCounter = pl_env(c, PL_ENV_DECAY);
                         if ((uint8_t)(c->envCounter & mask))
                         {
                             c->modify |= CGB_MO_VOL;
                             c->envVol = c->envGoal;
                             if (ch != 3)
-                                envelopeStepTimeAndDir = c->decay | 0;
+                                envelopeStepTimeAndDir = pl_env(c, PL_ENV_DECAY) | 0;
                         }
                         else
                         {
@@ -298,7 +299,7 @@ static void cgb_step(int ch, int prevC15)
                     }
                     else
                     {
-                        c->envCounter = c->attack;
+                        c->envCounter = pl_env(c, PL_ENV_ATTACK);
                     }
                 }
             }

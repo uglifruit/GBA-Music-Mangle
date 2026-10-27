@@ -5,8 +5,9 @@
 #include "rom.h"
 #include "scan.h"
 #include "cgb.h"
+#include "gba.h"
 
-PlayerMods g_mods = { 0, 0, 0, 0, 0, 4096, 0, 0, 0x100 };
+PlayerMods g_mods = { 0, 0, 0, 0, 0, 4096, 0, 0, 0x100, 0, 0, 0, 0, 0, 0, 0, 0, 22 };
 Track g_tracks[PL_TRACKS];
 Chan g_ds[PL_DS_MAX], g_cgb[PL_CGB];
 uint32_t g_plHeader, g_plTicks;
@@ -23,6 +24,11 @@ static uint16_t s_mute;
 // EOT releases the newest matching note, as m4a's head-inserted channel chain does.
 static uint32_t s_order, s_ds_order[PL_DS_MAX], s_cgb_order[PL_CGB];
 static uint8_t s_mem[256];
+// The sound hooks: the song's own reverb (the header's), and the global LFO's phase and outputs.
+static uint8_t s_songReverb;
+static uint8_t s_lfoPhase;
+static int16_t s_lfoPitch;               // 1/256 semitone, added like m4a's MODT 0
+static int16_t s_lfoVol;                 // volume x (128 + v) / 128, like m4a's MODT 1
 
 // Volatile byte stores prevent GCC synthesizing libc calls in freestanding builds.
 static void clear_bytes(void *dst, unsigned size)
@@ -31,9 +37,52 @@ static void clear_bytes(void *dst, unsigned size)
     for (unsigned i = 0; i < size; ++i) p[i] = 0;
 }
 
-static int clamp(int v, int lo, int hi)
+static inline __attribute__((always_inline)) int clamp(int v, int lo, int hi)
 {
     return v < lo ? lo : v > hi ? hi : v;
+}
+
+// x moved toward hi (v > 0) or lo (v < 0) by |v|/2048 of the way. x is clamped into [lo, hi] first:
+// a mangled voice can carry any byte.
+static unsigned bend_toward(unsigned x, int v, unsigned lo, unsigned hi)
+{
+    if (x < lo) x = lo;
+    if (x > hi) x = hi;
+    if (v > 0) return x + (((hi - x) * (unsigned)v + 1024u) >> 11);      // rounded: full scale reaches hi
+    if (v < 0) return x - (((x - lo) * (unsigned)-v + 1024u) >> 11);
+    return x;
+}
+
+// The envelope hooks, applied where each rate is read. m4a's two envelope models run opposite ways:
+//   DirectSound  attack is added per frame (255 = instant), decay and release multiply per frame
+//                (/256, so 255 = slowest), sustain is a level 0..255.
+//   PSG          attack, decay and release are step times 0..7 (0 = instant, 7 = slowest),
+//                sustain a level 0..15.
+// "Longer" therefore means toward 1 for a DirectSound attack and toward the top everywhere else.
+unsigned pl_env(const Chan *c, int which)
+{
+    int cgb = (c->type & TONEDATA_TYPE_CGB) != 0;
+    switch (which) {
+    case PL_ENV_ATTACK:
+        return cgb ? bend_toward(c->attack, g_mods.attack, 0, 7)
+                   : bend_toward(c->attack, -g_mods.attack, 1, 255);
+    case PL_ENV_DECAY:
+        return bend_toward(c->decay, g_mods.decay, 0, cgb ? 7 : 255);
+    case PL_ENV_SUSTAIN:
+        return bend_toward(c->sustain, g_mods.sustain, 0, cgb ? 15 : 255);
+    default:
+        return bend_toward(c->release, g_mods.release, 0, cgb ? 7 : 255);
+    }
+}
+
+// NOTE LENGTH: a gate time scaled x1/4 .. x4. 0 (a TIE, held until EOT) is left alone.
+static unsigned gate_len(unsigned g)
+{
+    int v = g_mods.gate;
+    if (!g || !v) return g;
+    if (v > 0) g += (g * 3u * (unsigned)v) >> 11;
+    else       g -= (g * 3u * (unsigned)-v) >> 13;
+    return g < 1 ? 1 : g > 255 ? 255 : g;
 }
 
 static unsigned channel_cap(void)
@@ -69,6 +118,7 @@ static void track_vol_pitch(Track *t)
     if (t->flags & MPT_FLG_VOLSET) {
         uint32_t x = (t->vol * t->volX) >> 5;
         if (t->modT == 1) x = (x * (t->modM + 128)) >> 7;
+        if (s_lfoVol) { x = (x * (uint32_t)(128 + s_lfoVol)) >> 7; if (x > 255) x = 255; }
         int y = 2 * t->pan + t->panX;
         if (t->modT == 2) y += t->modM;
         y = clamp(y, -128, 127);
@@ -79,6 +129,7 @@ static void track_vol_pitch(Track *t)
         int x = (t->tune + t->bend * t->bendRange) * 4 +
                 (t->keyShift + t->keyShiftX) * 256 + t->pitX;
         if (t->modT == 0) x += 16 * t->modM;
+        x += s_lfoPitch;
         t->keyM = x >> 8;
         t->pitM = x;
     }
@@ -132,7 +183,9 @@ static void clear_mod(Track *t)
 }
 
 // MPlayMain tail / m4aMPlayPitchControl (m4a.c).
-void player_update(void)
+// IWRAM: clock_service() calls it every millisecond. The helpers it reaches only on a change
+// (volume, pitch, mute) stay in EWRAM.
+IWRAM_CODE void player_update(void)
 {
     if (s_pitch != g_mods.pitch) {
         s_pitch = g_mods.pitch;
@@ -149,6 +202,7 @@ void player_update(void)
     }
     for (unsigned i = channel_cap(); i < PL_DS_MAX; ++i)
         if (g_ds[i].status & SF_ON) ds_off(i);
+    if (g_plHeader) g_mixReverb = (uint8_t)clamp(s_songReverb + g_mods.reverb, 0, 127);
     for (int n = 0; n < PL_TRACKS; ++n) {
         Track *t = &g_tracks[n];
         if (!(t->flags & MPT_FLG_EXIST) || !(t->flags & 15)) continue;
@@ -178,17 +232,18 @@ static void ds_envelope(int i)
     if (c->status & SF_IEC) {
         if (!c->echoLen || --c->echoLen == 0) { ds_off(i); return; }
     } else if (c->status & SF_STOP) {
-        env = (env * c->release) >> 8;
+        env = (env * pl_env(c, PL_ENV_RELEASE)) >> 8;
         if (env <= c->echoVol) goto echo;
     } else if ((c->status & SF_ENV) == SF_DECAY) {
-        env = (env * c->decay) >> 8;
-        if (env <= c->sustain) {
-            env = c->sustain;
+        unsigned sus = pl_env(c, PL_ENV_SUSTAIN);
+        env = (env * pl_env(c, PL_ENV_DECAY)) >> 8;
+        if (env <= sus) {
+            env = sus;
             if (!env) goto echo;
             --c->status;
         }
     } else if ((c->status & SF_ENV) == SF_ATTACK) {
-        env += c->attack;
+        env += pl_env(c, PL_ENV_ATTACK);
         if (env >= 255) { env = 255; --c->status; }
     }
     c->envVol = env;
@@ -201,8 +256,29 @@ echo:
     ds_volume(i);
 }
 
+// The global LFO (VIBRATO / TREMOLO), per frame so its rate does not follow the clock. A triangle,
+// -128..126, scaled like m4a's (wave x MOD) >> 6. Tracks are flagged only when an output changes.
+static void lfo_frame(void)
+{
+    int pv = 0, vv = 0;
+    if (g_mods.vibrato || g_mods.tremolo) {
+        s_lfoPhase = (uint8_t)(s_lfoPhase + g_mods.lfoSpeed);
+        int tri = s_lfoPhase < 128 ? (int)s_lfoPhase - 64 : 191 - (int)s_lfoPhase;
+        int wave = tri * 2;
+        pv = 16 * ((wave * (g_mods.vibrato > 63 ? 63 : g_mods.vibrato)) >> 6);
+        vv = (wave * (g_mods.tremolo > 63 ? 63 : g_mods.tremolo)) >> 6;
+    }
+    unsigned flags = (pv != s_lfoPitch ? MPT_FLG_PITCHG : 0) | (vv != s_lfoVol ? MPT_FLG_VOLCHG : 0);
+    if (!flags) return;
+    s_lfoPitch = (int16_t)pv;
+    s_lfoVol   = (int16_t)vv;
+    for (int n = 0; n < PL_TRACKS; ++n)
+        if (g_tracks[n].flags & MPT_FLG_EXIST) g_tracks[n].flags |= (uint8_t)flags;
+}
+
 void player_frame(void)
 {
+    lfo_frame();
     for (int i = 0; i < PL_DS_MAX; ++i) if (g_ds[i].status & SF_ON) {
         if (mixer_done(i)) ds_off(i);
         else ds_envelope(i);
@@ -249,7 +325,8 @@ int player_start(uint32_t songEntry)
     s_tone = rom_u32(SH_TONE(hdr)); s_priority = rom_u8(SH_PRIORITY(hdr));
     g_plTempoD = 150; g_plTicks = 0;
     unsigned reverb = rom_u8(SH_REVERB(hdr));
-    g_mixReverb = reverb & 128 ? reverb & 127 : 0;
+    s_songReverb = reverb & 128 ? reverb & 127 : 0;
+    g_mixReverb = (uint8_t)clamp(s_songReverb + g_mods.reverb, 0, 127);
     g_plHeader = hdr; g_plTrackCount = tc;
     return 1;
 }
@@ -339,7 +416,8 @@ static void note_on(int n, unsigned cmd)
         }
     }
     ++t->notes; t->lastKey = clamp(t->key + t->keyShift, 0, 127);
-    t->act = t->velocity; t->gate = 1; t->gateLeft = t->gateTime;
+    unsigned gate = gate_len(t->gateTime);
+    t->act = t->velocity; t->gate = 1; t->gateLeft = gate;
     uint8_t tone[TONE_SIZE];
     if (g_mods.voiceShift || g_mods.tableOffset) {
         uint32_t addr = s_tone + (int32_t)g_mods.tableOffset +
@@ -393,7 +471,7 @@ static void note_on(int n, unsigned cmd)
     track_vol_pitch(t);
     c->track = n; c->priority = priority; c->key = key; c->midiKey = t->key;
     c->velocity = t->velocity; c->rhythmPan = pan; c->type = type; c->wav = wav;
-    c->gateTime = t->gateTime;
+    c->gateTime = gate;
     c->attack = tone[8]; c->decay = tone[9]; c->sustain = tone[10]; c->release = tone[11];
     c->echoVol = t->echoVol; c->echoLen = t->echoLen;
     channel_vol(c, t);

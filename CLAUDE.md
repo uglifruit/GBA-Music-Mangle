@@ -57,8 +57,13 @@ an assistant.
 - **Nothing from the cart is trusted.** Every pointer goes through `rom_ok`. There are 64 commands
   per track per tick at most, `PORT` writes nothing, and `MEMACC` has a private 256-byte area. The
   mangles exist to read from wrong places, and a bad read must only ever be a wrong noise.
-- **The scan's sound-mode heuristic skips the SelectSong routine's own 48 bytes.** Its word at +16
-  (`c9 18 89 00`) passes every field test, and was found every time before the exclusion.
+- **The sound mode (the game's mixing rate) comes from m4aSoundInit's literal pool**, found by
+  saptapper's route: m4aSoundMain is the PUSH {LR} ≤ 0x20 before SelectSong, and m4aSoundInit one of
+  two prologues ≤ 0x100 before that. The last word in [init, main) that passes the field tests wins.
+  It replaced (2026-10-27) "the first passing word in the 16 KB around SelectSong", which chance
+  code/data words pass. A wrong rate plays every FIXED-RATE sample (most drum kits) at the wrong
+  speed. Suspected cause of Ruby's percussion sounding like white noise; not yet confirmed on
+  hardware (check CAL > RATE, which should read 13379 for Ruby). mktestrom's decoy word guards it.
 - **`scan.c` and `tools/m4a_scan.py` are line-for-line mirrors.** Fix both together.
 
 ## Clock (`clock.c`)
@@ -109,19 +114,40 @@ an assistant.
 - Go Go Beckham, Premier Manager and Hoyle's all reported no MP2K on the first hardware session.
   Re-scan them with this build to name their engines.
 
+## Booting from a saved slot (patch v4, 2026-10-27)
+
+- **A save records the cart** (`cartTag` = `rom_cart_tag()`, plus `romVersion`/`romCheck` beside
+  `game[4]`) **and its song tables** (address + rate, up to 8). At boot, `boot_from_slot()` (main.c)
+  waits ≤ 0.75 s for every slot's tag, loads the LOWEST-numbered matching slot, checks the full
+  identity (`mod_patch_is_this_cart`), and installs the tables with `scan_install()`, which drops any
+  table that no longer holds a playable song. Anything short of that falls through to the real scan.
+  B held skips it, and SET > RESCAN CART always scans (`scan_cart(0)`).
+- **Why tags rather than loading every slot:** a load is a byte per link word, ~0.3 s a slot. The
+  host announces each slot's tag (`GBA_OP_SLOT_TAG` 0x0A, every 16 words for the first 2048, then
+  every 64), read from flash at `GBA_PATCH_TAG_OFFSET` (108). `mod.c` asserts `offsetof(Patch,
+  cartTag)` against it: **that field must never move.** A CONTROL word has no check bits, so a tag
+  only picks the slot; the identity check is what trusts it.
+- The booted patch is applied after `mod_init()` and the first `mod_song_select(0)`, through
+  `mod_patch_loaded()`, so the scene (table, list, song, mutes) comes back too. `mod_patch_loaded`
+  now also sets `g_plGameRate` when it switches table (it didn't, unlike `mod_set_list`).
+- Scan method `SCAN_SAVED` (3) marks installed tables; CAL shows SAVED SLOT.
+
 ## Modulator (`mod.c`)
 
 - **Three ways in, summed:** MAP (Workshop sources × depth), BTN (the GBA's buttons in PERFORM
   mode: HOLD/LATCH add `2047 × amount` like a full-scale source, STEP edits the BASE value, an EDGE
   destination fires), and BASE (each destination's resting value **in its own units**: programs,
   bytes, semitones, cents, tracks; ranges in `s_baseMin/Max`). Bypass zeroes all three.
+- **The knobs have a ±200-count detent at noon** (about 15°), with the rest of the travel stretched
+  to full scale (`knob_value()`). The first hardware report had songs "weirdly slow" with X near
+  noon: the tempo curve is an octave per 1024 counts, so 15° off noon was about 16 % slow.
 - **A dead band of ±24 counts on every value source** (not PU2), not offset outside it, so 1V/oct
   stays exact. Quantised destinations **divide, never shift**: `dv >> 5` floors, and a CV1 reading
   of -1 gave a voice shift of -1 (every instrument swapped). This was the first hardware bug.
 - **PERFORM mode turns off auto-repeat.** A held button is a HOLD, and a repeat would turn one STEP
   press into a stream. `modtest` checks this.
 - `tools/pcplay/modtest` drives `mod_update()` with stubbed link inputs and simulated keys
-  (`g_hostIo[0x130]`, active low). 45 checks, all passing 2026-10-26. Run it after touching
+  (`g_hostIo[0x130]`, active low). 74 checks, all passing 2026-10-27. Run it after touching
   `mod.c`.
 
 - The FM card's division of labour: raw inputs arrive, and all meaning is in `g_patch.mod[]`.
@@ -131,11 +157,21 @@ an assistant.
 - Transpose is 1V/oct at **depth 63**: a semitone is 1792 in v×depth units.
 - The follower drops the gate for 3 ms on a new note while the gate is high, so legato notes
   retrigger downstream envelopes.
-- **Patch magic `'MP'` (0x4D50), `PATCH_VERSION 2`.** The FM card's rules apply: bump the version
+- **Patch magic `'MP'` (0x4D50), `PATCH_VERSION 4`.** The FM card's rules apply: bump the version
   for any change of layout *or* meaning, and prefer appending + migrating. v2 APPENDED table, list,
   BASE and BTN; `mod_patch_accept()` migrates a zero-padded v1 by giving it the factory buttons.
-  The scene (table, list, song, mutes) restores only when the game code matches. Patch is 82 bytes,
-  and a `_Static_assert` guards the 256-byte slot.
+  **v3 (2026-10-27) added ten destinations.** BASE couldn't grow in place (BTN follows it), so v2's
+  array is `baseV2[16]` (migrated, then zeroed) and a full `base[DEST_COUNT]` is appended. The
+  scene (table, list, song, mutes) restores only when the game code matches. v4 appended the cart
+  and its tables (next section above). Patch is 164 bytes, and a `_Static_assert` guards the
+  256-byte slot.
+- **The sound destinations (v3):** ATTACK DECAY SUSTAIN RELEASE (live, through `pl_env()` in
+  player.c, which cgb.c also reads through), NOTE LENGTH (at note-on), REVERB (added to the song
+  header's), VIBRATO/TREMOLO/LFO SPEED (one global LFO in `player_frame()`, m4a's MODT scales).
+  They are in PLAYER_SPEC §5.7's "added after delivery" table: the spec is still the contract.
+- **CLEAR MANGLES** (EDGE) zeroes BASE and the BTN latches, except TEMPO, TRANSPOSE and FINE PITCH
+  (the user asked to keep tempo and transpose; fine pitch counts as tuning, so it stays too).
+  Latches drop on the next update (the BTN sum is taken before the edges), BASE at once.
 - **A loaded patch is copied out of `g_patchBuf` before validation.** The buffer has no alignment
   guarantee, and the ARM7 rotates a misaligned halfword read rather than faulting.
 
@@ -148,6 +184,12 @@ an assistant.
   or the firmware changes.
 - **NEVER COPY A `build/` DIRECTORY BETWEEN TREES** (see the FM notes; it compiles the other tree's
   sources).
+- **Patches live in the THIRD-FROM-LAST flash sector** (`patch_store.cpp`, 2026-10-27). 108 has the
+  last and FM the second-to-last. A UF2 flash never erases them, and a save rewrites the whole
+  sector, so sharing one let each program's saves wipe the other's patches. This tree was seeded
+  before FM fixed that, and was writing 108's sector.
+- **`slot_valid()` only asks "erased or not"** (FM's fix): the seed still checked for 108's `'GB'`
+  magic, so every `'MP'` save showed as an empty slot. The GBA judges the patch (`mod_patch_accept`).
 
 ## Testing (`tools/`)
 
@@ -166,14 +208,23 @@ an assistant.
   - scrub and its wrap;
   - mute;
   - fuzz: 27 songs × 6 s with random mangles, **0 out-of-bounds reads**.
-- **pcplay does not render the PSG.** A silent result from a PSG voice is expected.
+- **pcplay does not render the PSG.** A silent result from a PSG voice is expected. cgb.c has
+  therefore never been HEARD off hardware; it was re-checked line by line against pret's CgbSound
+  and ply_note on 2026-10-27 (registers, noise table, drum key, envelope paths) and matches.
 - When measuring pitch by autocorrelation, take the first strong peak. Multiples of the period
   correlate as well, and an 880 Hz note was once "measured" as 293 Hz.
 
 ## Payload facts
 
-- 53.0 KB, about 8.0 s to upload. IWRAM holds about 5 KB: the DMA handlers, the dispatcher,
-  `mixer_render`, the scan loop, the rings, the echo line and the accumulators.
+- 58.3 KB, about 8.9 s to upload. IWRAM holds about 11 KB: the DMA handlers, the dispatcher,
+  `mixer_render`, the scan loop, the drawing primitives, `mod_update`, `clock_service`,
+  `player_update`, the rings, the echo line and the accumulators.
+- **Drawing speed (2026-10-27, FM's `SPEEDUPSCREEN.md`):** `rect`/`line`/`glyph`/`text` are FM's
+  IWRAM versions (word-wide fills, direct VRAM text). The bigger win here was **rate-limiting the
+  service**: `gfx_idle()` ran `mod_update()` + `clock_service()` after every character drawn,
+  from EWRAM. They now run at most once per 16 Timer 2 counts (~1 ms), from IWRAM, with their
+  per-call helpers forced inline. The CAL row SVC is the meter (wall time ÷ 1 ms, Timer 3). The
+  external BPM's `udiv32` moved from the service to `clock_pulse()`. Not yet measured on hardware.
 - Title `GBACARTPLAY`, code `CGMP`.
-- `gfx_idle()` runs the link, `mod_update()` and `clock_service()`, but only once the engine is up.
-  During the boot scan it services only the link.
+- `gfx_idle()` runs the link on every call, and `mod_update()` + `clock_service()` at most once a
+  millisecond, but only once the engine is up. During the boot scan it services only the link.

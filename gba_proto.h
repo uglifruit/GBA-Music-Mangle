@@ -145,6 +145,16 @@ static inline int gba_stream_valid(uint32_t w)
 #define GBA_OP_AUDEDGE      0x09u   // arg: [23:16] AU1 edges, [15:8] AU2 edges, [7:2] check,
                                     //      [1:0] levels (bit 0 AU1 high, bit 1 AU2 high)
 
+// ---- which cart each saved slot belongs to (GBA Cart Player) ----
+// So the GBA can skip its multi-second cart scan at boot: it loads the slot saved on the same cart,
+// which carries the song tables' addresses. Loading every slot to look would take seconds (a byte a
+// word), so the host announces each slot's 16-bit cart TAG instead - the two bytes at
+// GBA_PATCH_TAG_OFFSET of the stored patch, 0 for an empty slot - one slot per word, every 16
+// words for the first 2048 words of a session and every 64 after. The GBA only uses a tag to pick
+// a slot; it then checks the loaded patch's full cart identity itself.
+#define GBA_OP_SLOT_TAG     0x0Au   // arg: [19:16] slot, [15:0] tag (0 = empty or untagged)
+#define GBA_PATCH_TAG_OFFSET 108    // offsetof(Patch, cartTag) on the GBA; mod.c asserts it
+
 // Capability flags carried by GBA_OP_HELLO. The GBA shows these on its CAL page so you can
 // tell a tuning problem from an uncalibrated module without opening the source.
 #define GBA_CAP_CVOUT_CAL   (1u << 0)   // ComputerCard::CVOutsCalibrated() was true

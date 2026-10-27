@@ -27,6 +27,7 @@
 #define SCAN_NONE      0
 #define SCAN_SIGNATURE 1
 #define SCAN_HEURISTIC 2
+#define SCAN_SAVED     3    // not scanned: the tables came from a slot saved on this cart (main.c)
 
 #define SCAN_MAX_SONGS  2048
 #define SCAN_MAX_TABLES 8
@@ -66,6 +67,12 @@ typedef void (*ScanProgressFn)(uint32_t done256);
 // Find every table and select the first, in the current list mode. Returns g_scan.method, or
 // SCAN_NONE if no table holds a playable song.
 int scan_run(ScanProgressFn progress);
+
+// Install tables found on an earlier boot (a saved patch's) instead of scanning: addresses and
+// mixing rates. Each is checked as the scan checks its own (it must hold a playable song); rates
+// outside m4a's 5734..42048 become 13379. Returns the tables kept; 0 leaves the state as a scan that
+// found nothing, and the caller should scan for real.
+int scan_install(int n, const uint32_t *addr, const uint16_t *rate);
 
 // Select a table (0 .. g_tableCount-1) and list mode, and rebuild the song list. Returns the count.
 int scan_select(int table, int listMode);

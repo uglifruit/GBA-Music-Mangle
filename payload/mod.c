@@ -25,10 +25,12 @@ const char *src_name[SRC_COUNT]   = { "CV1", "CV2", "AU1", "AU2", "PU2", "MAIN",
 const char *dest_name[DEST_COUNT] = {
     "---", "CLOCK", "RESET", "NEXT SONG", "SONG", "VOICE SHIFT", "TABLE OFFSET", "SAMPLE START",
     "ROM SCRUB", "LAYERS", "SOLO", "TRANSPOSE", "FINE PITCH", "TEMPO", "REVERSE", "CRUSH",
+    "ATTACK", "DECAY", "SUSTAIN", "RELEASE", "NOTE LENGTH", "REVERB", "VIBRATO", "TREMOLO",
+    "LFO SPEED", "CLEAR MANGLES",
 };
 const char *dest_short[DEST_COUNT] = {
     "---", "CLK", "RST", "NXT", "SNG", "VSH", "TBL", "SST", "SCR", "LAY", "SOL", "TRN", "PIT",
-    "TMP", "REV", "CRU",
+    "TMP", "REV", "CRU", "ATK", "DCY", "SUS", "REL", "LEN", "RVB", "VIB", "TRM", "LFO", "CLR",
 };
 const char *btn_mode_name[BTN_MODES] = { "HOLD", "LATCH", "STEP" };
 const char *btn_name[BTN_SLOTS] = { "A", "B", "L", "R", "UP", "DOWN", "LEFT", "RIGHT" };
@@ -43,14 +45,19 @@ const uint32_t scrub_len[SCRUB_LEN_COUNT] = { 1024, 2048, 4096, 8192, 16384, 327
 static const uint8_t s_kind[DEST_COUNT] = {
     KIND_BIP,  KIND_EDGE, KIND_EDGE, KIND_EDGE, KIND_BIP, KIND_BIP, KIND_BIP, KIND_POS,
     KIND_BIP,  KIND_POS,  KIND_POS,  KIND_BIP,  KIND_BIP, KIND_BIP, KIND_POS, KIND_POS,
+    KIND_BIP,  KIND_BIP,  KIND_BIP,  KIND_BIP,  KIND_BIP, KIND_BIP, KIND_POS, KIND_POS,
+    KIND_BIP,  KIND_EDGE,
 };
 
 // BASE ranges, in each destination's own units (see the BASE page and mod_update):
 //   VSHIFT programs, TABLE bytes, START /128 of the sample, SCRUB a virtual knob, LAYERS tracks
 //   stripped, SOLO track (0 = none), TRANS semitones, PITCH cents, TEMPO a virtual knob, REVERSE
-//   /128 chance, CRUSH steps.
-static const int8_t s_baseMin[DEST_COUNT] = { 0, 0, 0, 0, 0, -64, -127,   0, -127,  0,  0, -48, -100, -127,   0,  0 };
-static const int8_t s_baseMax[DEST_COUNT] = { 0, 0, 0, 0, 0,  63,  127, 127,  127, 15, 16,  48,  100,  127, 127, 15 };
+//   /128 chance, CRUSH steps; ATTACK DECAY SUSTAIN RELEASE LENGTH and LFO SPEED virtual knobs,
+//   REVERB level added to the song's, VIBRATO and TREMOLO depth.
+static const int8_t s_baseMin[DEST_COUNT] = { 0, 0, 0, 0, 0, -64, -127,   0, -127,  0,  0, -48, -100, -127,   0,  0,
+                                              -127, -127, -127, -127, -127, -127,  0,  0, -127, 0 };
+static const int8_t s_baseMax[DEST_COUNT] = { 0, 0, 0, 0, 0,  63,  127, 127,  127, 15, 16,  48,  100,  127, 127, 15,
+                                               127,  127,  127,  127,  127,  127, 63, 63,  127, 0 };
 
 int dest_is_edge(int d)  { return d > 0 && d < DEST_COUNT && s_kind[d] == KIND_EDGE; }
 int dest_has_base(int d) { return d > 0 && d < DEST_COUNT && s_baseMax[d] != s_baseMin[d]; }
@@ -61,6 +68,9 @@ Patch    g_patch;
 // The whole Patch rides in one 256-byte flash slot (gba_proto.h). Appending is how it grows, so
 // this is the backstop that says when it no longer can.
 _Static_assert(sizeof(Patch) <= GBA_PATCH_SLOT_BYTES, "Patch no longer fits a flash slot");
+// The host reads the cart tag at a fixed offset (GBA_OP_SLOT_TAG); it must never move.
+_Static_assert(__builtin_offsetof(Patch, cartTag) == GBA_PATCH_TAG_OFFSET, "cartTag moved");
+_Static_assert(PATCH_TABLES == SCAN_MAX_TABLES, "the saved table list must hold every table");
 int      g_song    = -1;
 uint16_t g_uiMute  = 0;
 uint8_t  g_uiSolo  = 0xFF;
@@ -98,13 +108,20 @@ static uint8_t  s_retrig;
 // Readings outside it are not offset, so 1V/oct transpose stays exact.
 #define DEAD_BAND 24
 
+// The knobs get a much wider detent at noon, about 15 degrees either way, and the rest of the
+// travel is stretched so the ends still reach full scale. With TEMPO and ROM SCRUB on X and Y, a
+// knob left roughly at noon must give the song's own tempo and clean samples: an octave of tempo
+// per quarter turn made "about noon" audibly slow. Knobs carry no 1V/oct, so the stretch is free.
+#define KNOB_DETENT  200
+#define KNOB_STRETCH 1135                 // 2048 / (2048 - KNOB_DETENT), Q10
+
 // Auto-repeat for held d-pad and shoulder buttons, in Timer 2 counts. Not in PERFORM mode, where a
 // held button is a HOLD and a repeat would be a stream of STEPs.
 #define REPEAT_DELAY (16384u * 2 / 5)       // 400 ms
 #define REPEAT_RATE  (16384u / 12)          // ~83 ms
 #define REPEAT_KEYS  (KEY_UP | KEY_DOWN | KEY_LEFT | KEY_RIGHT | KEY_L | KEY_R)
 
-static int32_t clampi(int32_t v, int32_t lo, int32_t hi) { return v < lo ? lo : v > hi ? hi : v; }
+static inline __attribute__((always_inline)) int32_t clampi(int32_t v, int32_t lo, int32_t hi) { return v < lo ? lo : v > hi ? hi : v; }
 
 // ---- patch ---------------------------------------------------------------------------------------
 
@@ -172,6 +189,15 @@ int mod_patch_accept(Patch *p)
         default_buttons(p);
         p->version = 2;
     }
+    // v2 -> v3: BASE moved to the end at full size. The new destinations start at 0.
+    if (p->version == 2) {
+        for (int d = 0; d < DEST_COUNT; d++) p->base[d] = d < DEST_COUNT_V2 ? p->baseV2[d] : 0;
+        for (int d = 0; d < DEST_COUNT_V2; d++) p->baseV2[d] = 0;
+        p->version = 3;
+    }
+    // v3 -> v4: the cart fields arrived as zeros, which already means "no tables saved".
+    if (p->version == 3) p->version = 4;
+    if (p->tableCount > PATCH_TABLES) p->tableCount = 0;
 
     for (int i = 0; i < BTN_SLOTS; i++) {
         if (p->btn[i].dest >= DEST_COUNT || p->btn[i].mode >= BTN_MODES) return 0;
@@ -200,6 +226,24 @@ void mod_patch_prepare_save(void)
     g_patch.mute  = g_uiMute;
     g_patch.table = g_tableIx;
     g_patch.list  = g_listMode;
+    // The cart and where its music is, so the next boot on this cart can skip the scan.
+    g_patch.cartTag    = rom_cart_tag();
+    g_patch.romVersion = g_romVersion;
+    g_patch.romCheck   = g_romCheck;
+    int n = (g_scan.method == SCAN_NONE) ? 0 : g_tableCount;
+    g_patch.tableCount = (uint8_t)n;
+    for (int i = 0; i < PATCH_TABLES; i++) {
+        g_patch.tableAddr[i] = i < n ? g_tables[i].songTable : 0;
+        g_patch.tableRate[i] = i < n ? g_tables[i].gameRate : 0;
+    }
+}
+
+int mod_patch_is_this_cart(const Patch *p)
+{
+    if (!g_romSize || p->cartTag != rom_cart_tag()) return 0;
+    if (p->romVersion != g_romVersion || p->romCheck != g_romCheck) return 0;
+    for (int i = 0; i < 4; i++) if (p->game[i] != g_romCode[i]) return 0;
+    return 1;
 }
 
 void mod_patch_loaded(void)
@@ -208,12 +252,25 @@ void mod_patch_loaded(void)
     int same = 1;
     for (int i = 0; i < 4; i++) if (g_patch.game[i] != g_romCode[i]) same = 0;
     if (!same) return;
-    if (g_patch.table < g_tableCount && (g_patch.table != g_tableIx || g_patch.list != g_listMode))
+    if (g_patch.table < g_tableCount && (g_patch.table != g_tableIx || g_patch.list != g_listMode)) {
         scan_select(g_patch.table, g_patch.list);
+        g_plGameRate = g_scan.gameRate;          // the table's own mixing rate, as mod_set_list
+    }
     if (g_patch.song < g_songCount) {
         mod_song_select(g_patch.song);
         g_uiMute = g_patch.mute;
     }
+}
+
+// CLEAR MANGLES: every BASE value back to 0 and every latched button off - except where the song
+// sits rather than how it is mangled: TEMPO, TRANSPOSE and FINE PITCH. A CV or a knob cannot be
+// cleared from here; they are wherever they are.
+static int kept_on_clear(int d) { return d == DEST_TEMPO || d == DEST_TRANS || d == DEST_PITCH; }
+static void clear_mangles(void)
+{
+    for (int d = 0; d < DEST_COUNT; d++) if (!kept_on_clear(d)) g_patch.base[d] = 0;
+    for (int i = 0; i < BTN_SLOTS; i++)
+        if (!kept_on_clear(g_patch.btn[i].dest)) g_btnLatch &= (uint8_t)~(1u << i);
 }
 
 // ---- songs ---------------------------------------------------------------------------------------
@@ -263,7 +320,7 @@ uint16_t mod_take_presses(void)
     return p;
 }
 
-static void read_buttons(uint32_t now)
+static inline __attribute__((always_inline)) void read_buttons(uint32_t now)
 {
     uint16_t held = (uint16_t)((~REG_KEYINPUT) & 0x03FFu);
     uint16_t down = held & (uint16_t)~g_btn;
@@ -284,7 +341,7 @@ static void read_buttons(uint32_t now)
 
 // 2^(v/1024) x 256 for v in -2048..2047: x0.25 .. x4, the integer part a shift and the fraction a
 // straight line (within 6 % of the curve, and monotonic, which is what a tempo knob needs).
-static uint32_t tempo_scale(int32_t v)
+static inline __attribute__((always_inline)) uint32_t tempo_scale(int32_t v)
 {
     int32_t e = v >> 10;                                // -2 .. 1 (arithmetic shift)
     uint32_t m = 256u + (((uint32_t)(v & 1023) * 256u) >> 10);
@@ -294,7 +351,7 @@ static uint32_t tempo_scale(int32_t v)
 // The ROM SCRUB curve: |v| 0..2047 -> 0 .. 16 MB, exponential - one octave of offset per 64 counts -
 // so the start of a knob's travel moves by bytes (a sample slips against itself), the middle by
 // kilobytes (into neighbouring samples) and the end by megabytes (another part of the cart).
-static int32_t scrub_offset(int32_t v)
+static inline __attribute__((always_inline)) int32_t scrub_offset(int32_t v)
 {
     uint32_t a = (uint32_t)(v < 0 ? -v : v);
     if (a == 0) return 0;
@@ -313,7 +370,20 @@ void mod_init(void)
 
 // ---- the update ------------------------------------------------------------------------------------
 
-void mod_update(void)
+// A knob, centred on 0, through the noon detent.
+static inline __attribute__((always_inline)) int32_t knob_value(uint16_t raw)
+{
+    int32_t v = (int32_t)raw - 2048;
+    int32_t a = v < 0 ? -v : v;
+    if (a <= KNOB_DETENT) return 0;
+    a = ((a - KNOB_DETENT) * KNOB_STRETCH) >> 10;
+    if (a > 2047) a = 2047;
+    return v < 0 ? -a : a;
+}
+
+// IWRAM: it runs every millisecond (main.c, gfx_idle). Its per-call helpers above are forced inline
+// so none of them runs from EWRAM; the rare calls (song changes, the link posts) stay out there.
+IWRAM_CODE void mod_update(void)
 {
     uint32_t now = clock_now();
     read_buttons(now);
@@ -322,9 +392,9 @@ void mod_update(void)
     int32_t v[SRC_COUNT];
     for (int i = 0; i < 4; i++) v[i] = (int32_t)g_in[i] - 2048;
     v[SRC_PU2]  = g_gate ? 2047 : 0;
-    v[SRC_MAIN] = (int32_t)g_knob[0] - 2048;
-    v[SRC_X]    = (int32_t)g_knob[1] - 2048;
-    v[SRC_Y]    = (int32_t)g_knob[2] - 2048;
+    v[SRC_MAIN] = knob_value(g_knob[0]);
+    v[SRC_X]    = knob_value(g_knob[1]);
+    v[SRC_Y]    = knob_value(g_knob[2]);
     for (int s = 0; s < SRC_COUNT; s++)
         if (s != SRC_PU2 && v[s] > -DEAD_BAND && v[s] < DEAD_BAND) v[s] = 0;
 
@@ -419,6 +489,7 @@ void mod_update(void)
         }
     }
     for (uint8_t n = edgeN[DEST_CLOCK]; n; n--) clock_pulse();
+    if (edgeN[DEST_CLEAR]) clear_mangles();
 
     // ---- the mangles: CV + buttons (dv) plus the BASE value, each in its own units ----
     int bypass = g_bypass;
@@ -428,6 +499,8 @@ void mod_update(void)
         g_mods.voiceShift = 0; g_mods.tableOffset = 0; g_mods.sampleStart = 0;
         g_mods.reverseChance = 0; g_mods.romScrub = 0; g_mods.pitch = 0; g_mods.tempoU = 0x100;
         g_crushHold = 1; g_crushMask = 0xFF;
+        g_mods.attack = 0; g_mods.decay = 0; g_mods.sustain = 0; g_mods.release = 0; g_mods.gate = 0;
+        g_mods.reverb = 0; g_mods.vibrato = 0; g_mods.tremolo = 0; g_mods.lfoSpeed = 22;
     } else {
         // Divides, not shifts: a shift floors, and -1 >> 5 is a whole program down.
         g_mods.voiceShift    = (int16_t)clampi(dv[DEST_VSHIFT] / 32 + bs[DEST_VSHIFT], -127, 127);
@@ -445,6 +518,19 @@ void mod_update(void)
         g_mods.pitch  = (int16_t)clampi(pitch, -32767, 32767);
 
         g_mods.tempoU = (uint16_t)tempo_scale(clampi(dv[DEST_TEMPO] + bs[DEST_TEMPO] * 16, -2048, 2047));
+
+        // The sound: envelopes and note length as virtual knobs (BASE x 16, as SCRUB and TEMPO).
+        g_mods.attack  = (int16_t)clampi(dv[DEST_ATTACK]  + bs[DEST_ATTACK]  * 16, -2047, 2047);
+        g_mods.decay   = (int16_t)clampi(dv[DEST_DECAY]   + bs[DEST_DECAY]   * 16, -2047, 2047);
+        g_mods.sustain = (int16_t)clampi(dv[DEST_SUSTAIN] + bs[DEST_SUSTAIN] * 16, -2047, 2047);
+        g_mods.release = (int16_t)clampi(dv[DEST_RELEASE] + bs[DEST_RELEASE] * 16, -2047, 2047);
+        g_mods.gate    = (int16_t)clampi(dv[DEST_LENGTH]  + bs[DEST_LENGTH]  * 16, -2047, 2047);
+        g_mods.reverb  = (int8_t)clampi(dv[DEST_REVERB] / 16 + bs[DEST_REVERB], -127, 127);
+        g_mods.vibrato = (uint8_t)clampi(dv[DEST_VIBRATO] / 32 + bs[DEST_VIBRATO], 0, 63);
+        g_mods.tremolo = (uint8_t)clampi(dv[DEST_TREMOLO] / 32 + bs[DEST_TREMOLO], 0, 63);
+        // LFO SPEED: m4a's default 22 per frame (about 5 Hz), x1/4 .. x4 on TEMPO's curve.
+        g_mods.lfoSpeed = (uint8_t)clampi((int32_t)((22u * tempo_scale(clampi(dv[DEST_LFO] + bs[DEST_LFO] * 16,
+                                                                             -2048, 2047))) >> 8), 1, 255);
 
         int32_t c = clampi((dv[DEST_CRUSH] >> 7) + bs[DEST_CRUSH], 0, 15);
         g_crushHold = (uint8_t)(1 + (c >> 1));

@@ -84,6 +84,10 @@ extern volatile uint8_t g_xferSlot;
 extern volatile uint8_t g_xferResult;                      // LINK_RESULT_*
 extern volatile uint8_t g_loadReady;                       // a LOAD landed; the UI clears it
 extern volatile uint16_t g_slotMask;                       // which host slots hold a patch
+// Each slot's cart tag as the host announces them (GBA_OP_SLOT_TAG), and which have arrived.
+// A CONTROL word has no check bits, so a tag only picks a slot to try; the patch is checked.
+extern volatile uint16_t g_slotTag[GBA_PATCH_SLOTS];
+extern volatile uint16_t g_slotTagSeen;
 extern volatile uint8_t g_patchBuf[GBA_PATCH_SLOT_BYTES];  // staging for both directions
 
 void link_begin_save(uint8_t slot, const uint8_t *data, int len);

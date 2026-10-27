@@ -13,21 +13,31 @@
 static_assert(GBA_PATCH_SLOTS * GBA_PATCH_SLOT_BYTES == SECTOR_BYTES,
               "the slot table must be exactly one flash sector: the sector is the erase unit");
 
-// The last sector of the 2 MB part. Firmware is under 60 kB, so there is no chance of collision,
-// and putting it at the very end keeps it clear of anything the linker might grow into.
-static constexpr uint32_t kFlashOffset = PICO_FLASH_SIZE_BYTES - SECTOR_BYTES;
+// The THIRD-FROM-LAST sector of the 2 MB part. Each GBA program keeps its own, because a UF2 flash
+// never erases these sectors and a save rewrites the whole sector: sharing one, each program's
+// saves overwrote the other's patches. The last is GBA PSG Voice's (108), the second-to-last GBA FM
+// Voice's, and this one GBA Cart Player's. Firmware is under 100 kB, so there is still no chance of
+// collision with the code.
+static constexpr uint32_t kFlashOffset = PICO_FLASH_SIZE_BYTES - 3 * SECTOR_BYTES;
 
 static const uint8_t *slot_ptr(int slot)
 {
     return (const uint8_t *)(XIP_BASE + kFlashOffset + (uint32_t)slot * GBA_PATCH_SLOT_BYTES);
 }
 
-// A stored slot begins with the same two magic bytes and version the GBA's Patch does. Erased
-// flash reads as 0xFF, so a never-written slot fails this and reads as empty rather than as a
-// patch full of 0xFF.
+// A slot is in use if it is not ERASED. Erased flash reads as 0xFF, and every patch starts with a
+// magic that is not 0xFFFF, so a never-written slot reads as empty rather than as a patch full of
+// 0xFF.
+//
+// THE HOST DOES NOT JUDGE WHAT KIND OF PATCH IT IS - the GBA does, on load (mod_patch_accept()).
+// 108's version checked for its own magic 'GB' here, and carried over unchanged it made every FM
+// patch ('FM') look like an empty slot: the save was written and acknowledged, then the slot
+// showed FREE and a load said SLOT IS EMPTY. Leaving the judgement to the GBA also gives the
+// intended behaviour for a 108 patch left in a slot: it shows as used, and loading it is rejected
+// on the GBA as BAD DATA.
 static bool slot_valid(const uint8_t *p)
 {
-    return p[0] == 0x42 && p[1] == 0x47;      // 'B','G' little-endian PATCH_MAGIC
+    return !(p[0] == 0xFF && p[1] == 0xFF);
 }
 
 bool patch_store_load(int slot, uint8_t *out)
@@ -45,6 +55,14 @@ uint16_t patch_store_used(void)
     for (int i = 0; i < GBA_PATCH_SLOTS; i++)
         if (slot_valid(slot_ptr(i))) mask |= (uint16_t)(1u << i);
     return mask;
+}
+
+uint16_t patch_store_tag(int slot)
+{
+    if (slot < 0 || slot >= GBA_PATCH_SLOTS) return 0;
+    const uint8_t *p = (const uint8_t *)(XIP_BASE + kFlashOffset) + (uint32_t)slot * GBA_PATCH_SLOT_BYTES;
+    if (!slot_valid(p)) return 0;
+    return (uint16_t)(p[GBA_PATCH_TAG_OFFSET] | (p[GBA_PATCH_TAG_OFFSET + 1] << 8));
 }
 
 // Runs with XIP disabled and the other core parked, so it must touch nothing in flash: no

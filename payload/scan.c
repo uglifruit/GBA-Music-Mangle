@@ -209,25 +209,55 @@ static int find_heuristic(ScanProgressFn progress, uint32_t *done)
     return g_tableCount != 0;
 }
 
-// Best effort: the m4aSoundMode word m4aSoundInit loads from its literal pool, somewhere near
-// SelectSong (the library is one object file). Recognised by its fields all being legal at once:
-// DA bits 8..B, a rate index 1..12, 1..12 channels, a master volume of at least 4, a clear top byte.
-// The routine's own 48 bytes are skipped: its word at +16 (c9 18 89 00) passes every one of those
-// tests, so without the exclusion it is found every time.
-static uint32_t find_sound_mode(uint32_t near)
+// The nearest 4-aligned match of one of the patterns in [pos - len, pos), searching backwards:
+// saptapper's find_backwards. 0 if none.
+static uint32_t find_back(uint32_t pos, uint32_t len, const uint8_t *pats, int nPats, unsigned patLen)
 {
-    uint32_t lo = (near > ROM_BASE + 0x2000u) ? near - 0x2000u : ROM_BASE;
-    uint32_t hi = near + 0x2000u;
-    if (hi > g_romEnd) hi = g_romEnd;
+    for (uint32_t a = pos - 4; a + len >= pos && a >= ROM_BASE; a -= 4) {
+        if (!rom_ok(a, patLen)) continue;
+        for (int p = 0; p < nPats; p++) {
+            unsigned i = 0;
+            while (i < patLen && rom_u8(a + i) == pats[p * patLen + i]) i++;
+            if (i == patLen) return a;
+        }
+    }
+    return 0;
+}
+
+// The m4aSoundMode word that m4aSoundInit loads from its literal pool: it holds the game's mixing
+// rate, which the fixed-rate samples (most drum kits) play at.
+//
+// saptapper's route to m4aSoundInit (FindMainFn, FindInitFn): m4aSoundMain is the nearest PUSH {LR}
+// within 0x20 bytes before SelectSong, and m4aSoundInit the nearest of two prologues within 0x100
+// bytes before that. The library builds them in that order (pret's m4a.c), so m4aSoundInit's
+// literal pool lies between it and m4aSoundMain. Its other literals are RAM and ROM pointers and a
+// CpuSet word, none of which pass the field tests below.
+//
+// This replaced a search of the 16 KB around SelectSong, which took the first word passing the
+// field tests. Code and data pass them by chance often enough that a game could get a wrong rate,
+// and every drum then played too fast or too slow (Pokemon Ruby's percussion came out as hiss).
+//
+// The field tests: DA bits 8..B, a rate index 1..12, 1..12 channels, a master volume of at least 4,
+// a clear top byte. With no prologue matched, the 0x200 bytes before SelectSong are searched
+// instead. Either way the LAST passing word wins, as the pool sits at the end of m4aSoundInit.
+static const uint8_t kPushLr[2]  = { 0x00, 0xb5 };
+static const uint8_t kInitFn[8]  = { 0x70, 0xb5, 0x14, 0x48,       // push {r4-r6,lr}; ldr r0, =SoundMainRAM+1
+                                     0xf0, 0xb5, 0x47, 0x46 };     // push {r4-r7,lr}; mov r7, r8
+static uint32_t find_sound_mode(uint32_t selectSong)
+{
+    uint32_t mainFn = find_back(selectSong, 0x20, kPushLr, 1, 2);
+    uint32_t initFn = mainFn ? find_back(mainFn, 0x100, kInitFn, 2, 4) : 0;
+    uint32_t lo = initFn ? initFn : (selectSong > ROM_BASE + 0x200u ? selectSong - 0x200u : ROM_BASE);
+    uint32_t hi = initFn ? mainFn : selectSong;
+    uint32_t found = 0;
     for (uint32_t a = lo & ~3u; a + 4 <= hi; a += 4) {
-        if (a >= near && a < near + 48) continue;
         uint32_t w = rom_u32(a);
         uint32_t da = (w >> 20) & 0xF, fq = (w >> 16) & 0xF, mv = (w >> 12) & 0xF, ch = (w >> 8) & 0xF;
         if ((w >> 24) == 0 && da >= 8 && da <= 0xB && fq >= 1 && fq <= 12 && mv >= 4 && ch >= 1 && ch <= 12
             && ((w & 0xFF) == 0 || (w & 0x80)))
-            return w;
+            found = w;
     }
-    return 0;
+    return found;
 }
 
 static void add_table(uint8_t method, uint32_t selectSong, uint32_t table)
@@ -330,6 +360,34 @@ int scan_run(ScanProgressFn progress)
     // first 250-odd songs are effects), and song 1 should be a song.
     if (scan_select(0, LIST_MUSIC) == 0) scan_select(0, LIST_ALL);
     return g_scan.method;
+}
+
+int scan_install(int n, const uint32_t *addr, const uint16_t *rate)
+{
+    g_tableCount = 0;
+    g_tableIx    = 0;
+    g_songCount  = 0;
+    sniff_init();
+    for (int i = 0; i < n && i < SCAN_MAX_TABLES; i++) {
+        uint32_t a = addr[i];
+        if ((a & 3) || !rom_ok(a, SONG_ENTRY_SIZE)) continue;
+        ScanResult *t = &g_tables[g_tableCount++];
+        t->method       = SCAN_SAVED;
+        t->selectSong   = 0;
+        t->songTable    = a;
+        t->tableEntries = 0;
+        t->soundMode    = 0;
+        t->gameRate     = (rate[i] >= 5734 && rate[i] <= 42048) ? rate[i] : 13379;
+    }
+    if (drop_empty() == 0) {
+        g_tables[0].method   = SCAN_NONE;
+        g_tables[0].songTable = 0;
+        g_tables[0].gameRate = 13379;
+        g_songCount = 0;
+        return 0;
+    }
+    if (scan_select(0, LIST_MUSIC) == 0) scan_select(0, LIST_ALL);
+    return g_tableCount;
 }
 
 uint32_t scan_song_entry(int n)

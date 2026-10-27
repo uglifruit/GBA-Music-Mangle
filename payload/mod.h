@@ -21,6 +21,7 @@
 //   PU2  -> CLOCK          AU1 -> RESET           AU2 -> SAMPLE START
 //   CV1  -> VOICE SHIFT    CV2 -> TRANSPOSE (1V/oct)
 //   MAIN -> LAYERS         X   -> TEMPO           Y   -> ROM SCRUB
+// (The sound destinations and CLEAR MANGLES are not in the factory map: assign them on MAP/BTN.)
 // The factory buttons (PERFORM mode):
 //   A hold REVERSE   B hold CRUSH   L/R step VOICE SHIFT   UP/DOWN step TRANSPOSE
 //   LEFT/RIGHT step TABLE OFFSET
@@ -58,7 +59,20 @@ extern const char *src_name[SRC_COUNT];
 #define DEST_TEMPO   13    // BIP:  internal tempo x0.25 .. x4
 #define DEST_REVERSE 14    // POS:  chance each note plays its sample backwards
 #define DEST_CRUSH   15    // POS:  sample-and-hold and bit reduction on the output
-#define DEST_COUNT   16
+// ---- added 2026-10-27 (patch v3): the sound itself, m4a's own controls turned from outside ----
+#define DEST_ATTACK  16    // BIP:  envelope attack, + slower (swells) / - snappier, live
+#define DEST_DECAY   17    // BIP:  envelope decay, + longer / - shorter, live
+#define DEST_SUSTAIN 18    // BIP:  envelope sustain level, + higher / - lower, live
+#define DEST_RELEASE 19    // BIP:  envelope release, + longer tails / - cut short, live
+#define DEST_LENGTH  20    // BIP:  note length x1/4 .. x4 (staccato / legato), at note-on
+#define DEST_REVERB  21    // BIP:  the engine's reverb, added to the song's own (- removes it)
+#define DEST_VIBRATO 22    // POS:  the engine's LFO on pitch, depth
+#define DEST_TREMOLO 23    // POS:  the same LFO on volume, depth
+#define DEST_LFO     24    // BIP:  that LFO's speed, x1/4 .. x4 around m4a's default
+#define DEST_CLEAR   25    // EDGE: CLEAR MANGLES - every BASE value to 0 and every latch off,
+                           //       except TEMPO, TRANSPOSE and FINE PITCH
+#define DEST_COUNT   26
+#define DEST_COUNT_V2 16   // the destinations a v1/v2 patch knew
 extern const char *dest_name[DEST_COUNT];
 extern const char *dest_short[DEST_COUNT];   // three letters, for the PERFORM legend
 int  dest_is_edge(int d);
@@ -110,8 +124,15 @@ extern const uint32_t scrub_len[SCRUB_LEN_COUNT];
 //   v1  the map, settings, scene.
 //   v2  table + list mode, BASE values, BTN map - APPENDED. A v1 slot arrives zero-padded past its
 //       end; mod_patch_accept() gives it the factory buttons and migrates it.
+//   v3  ten more destinations. BASE could not grow in place (BTN follows it), so the v2 array is
+//       left as baseV2 and a full-size base[] is APPENDED; mod_patch_accept() copies a v2 slot's
+//       values across.
+//   v4  the cart the patch was saved on (tag + version + checksum, beside game[4]) and where its
+//       song tables are - APPENDED. At boot, a slot saved on the inserted cart is loaded and the
+//       scan skipped (main.c). A v3 slot arrives with these zeroed: no tag, no tables, no skip.
 #define PATCH_MAGIC   0x4D50u
-#define PATCH_VERSION 2
+#define PATCH_VERSION 4
+#define PATCH_TABLES  8            // = SCAN_MAX_TABLES (mod.c asserts it)
 
 typedef struct {
     uint16_t magic;
@@ -134,8 +155,18 @@ typedef struct {
     // ---- v2 ---- (keep appending; nothing above may move)
     uint8_t  table;            // scene: song table index
     uint8_t  list;             // scene: LIST_*
-    int8_t   base[DEST_COUNT]; // BASE values, in each destination's own units
+    int8_t   baseV2[DEST_COUNT_V2]; // v2's BASE values; migrated into base[] and unused since v3
     BtnSlot  btn[BTN_SLOTS];
+    // ---- v3 ----
+    int8_t   base[DEST_COUNT]; // BASE values, in each destination's own units
+    // ---- v4 ---- the cart, and its music's whereabouts (written on every save)
+    uint16_t cartTag;          // rom_cart_tag(); AT GBA_PATCH_TAG_OFFSET, the host announces it
+    uint8_t  romVersion;       // header 0xBC
+    uint8_t  romCheck;         // header 0xBD
+    uint8_t  tableCount;       // song tables below, 0 = none (no MP2K found when saved)
+    uint8_t  pad4[3];
+    uint32_t tableAddr[PATCH_TABLES];
+    uint16_t tableRate[PATCH_TABLES];
 } Patch;
 
 extern Patch g_patch;
@@ -162,6 +193,7 @@ int  mod_patch_accept(Patch *p);        // validate, migrate older versions, cla
 void mod_patch_applied(void);           // push the patch's settings into the engine
 void mod_patch_prepare_save(void);      // record the scene into g_patch before a save
 void mod_patch_loaded(void);            // after a load: settings, and the scene if it is this game
+int  mod_patch_is_this_cart(const Patch *p);  // saved on the inserted cart (tag, code, version, sum)
 
 // ---- buttons (sampled in mod_update; the UI drains the latch at frame rate) ----
 extern uint16_t g_btn;                  // held now (GbaKey layout)

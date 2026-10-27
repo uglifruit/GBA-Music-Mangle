@@ -167,7 +167,9 @@ IWRAM_CODE void mixer_render(int8_t *outL, int8_t *outR)
         int32_t r = ((aR[i] >> 8) * (int32_t)gain) >> 4;
         if (l > 127) l = 127; else if (l < -128) l = -128;
         if (r > 127) r = 127; else if (r < -128) r = -128;
-        if (rev) s_echo[(p + i) & (ECHO_LEN - 1)] = (int8_t)((l + r) >> 1);
+        // Written even with the reverb off: REVERB can be turned up mid-song, and its first echo
+        // must be what just played, not whatever was left in the ring.
+        s_echo[(p + i) & (ECHO_LEN - 1)] = (int8_t)((l + r) >> 1);
 
         if (hold > 1) {
             if (s_holdCount == 0) { s_holdL = (int8_t)l; s_holdR = (int8_t)r; s_holdCount = (uint8_t)hold; }

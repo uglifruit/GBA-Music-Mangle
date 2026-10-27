@@ -14,6 +14,9 @@
 //   3. NOTHING IS TRUSTED. Every pointer is bounds-checked, call depth is capped, and a track that
 //      runs too many commands without a wait is stopped - because the mangle hooks below exist to
 //      read from places the data was never meant to be read from.
+//
+// The mangle hooks also reach the sound itself (envelopes, note length, reverb, an LFO): m4a's own
+// controls, turned from outside the song.
 #pragma once
 
 #include <stdint.h>
@@ -37,7 +40,28 @@ typedef struct {
     uint16_t mute;            // bit per track: silenced (still playing, so unmute is instant)
     int16_t  pitch;           // global, 1/256 semitone (transpose + fine), like m4aMPlayPitchControl
     uint16_t tempoU;          // 0x100 = the song's tempo (m4aMPlayTempoControl's units)
+    // ---- the sound itself (added 2026-10-27, after the outside developer's player) ----
+    // The envelope hooks are read LIVE, wherever an envelope reads its rate (ds_envelope, cgb.c),
+    // so a held button reaches notes already sounding. Each is -2048..2047 and 0 = as the game
+    // wrote it; full scale moves the value all the way to that end of its range (see pl_env()).
+    int16_t  attack;          // + slower attack (swells), - snappier
+    int16_t  decay;           // + longer decay, - shorter
+    int16_t  sustain;         // + higher sustain level, - lower
+    int16_t  release;         // + longer tails, - notes cut short
+    int16_t  gate;            // note length at note-on: + up to x4, - down to x1/4 (TIEs unchanged)
+    int8_t   reverb;          // added to the song's own reverb (m4a's echo), -127..127
+    uint8_t  vibrato;         // the engine's LFO on every track's pitch, depth 0..63 (m4a MOD units)
+    uint8_t  tremolo;         // the same LFO on every track's volume, depth 0..63
+    uint8_t  lfoSpeed;        // that LFO's speed per frame (m4a LFOS units; 22 is m4a's default)
 } PlayerMods;
+
+// The envelope values in force for a channel, with the hooks above applied: which = 0 attack,
+// 1 decay, 2 sustain, 3 release. DirectSound and PSG channels have different ranges and senses
+// (m4a's), handled inside. For player.c and cgb.c.
+#define PL_ENV_ATTACK  0
+#define PL_ENV_DECAY   1
+#define PL_ENV_SUSTAIN 2
+#define PL_ENV_RELEASE 3
 
 extern PlayerMods g_mods;
 
@@ -130,3 +154,4 @@ void     player_tick(void);                  // ONE sequencer tick (24 PPQN)
 void     player_update(void);                // apply mods + volume/pitch changes; call often
 void     player_frame(void);                 // the ~60 Hz envelope step (DS + CGB)
 uint32_t player_tempo_i(void);               // tempoD x tempoU >> 8: ticks/frame x 150
+unsigned pl_env(const Chan *c, int which);   // PL_ENV_*: the envelope value in force (see above)

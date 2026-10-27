@@ -44,7 +44,14 @@ rom[0x1000:0x101E] = bytes([
     0x89, 0x18, 0x0a, 0x68, 0x01, 0x68, 0x10, 0x1c, 0x00, 0xf0])
 TABLE = 0x2000
 w32(0x1028, B + TABLE)
-w32(0x1100, 0x0094C500)        # DA 8 bit, 13379 Hz, master 12, 5 channels
+# m4aSoundInit (saptapper's first prologue) with its m4aSoundMode literal at the end of its pool,
+# then m4aSoundMain (PUSH {LR}) just before SelectSong, as the library lays them out.
+rom[0x0F00:0x0F04] = bytes([0x70, 0xb5, 0x14, 0x48])
+w32(0x0FE0, 0x0094C500)        # DA 8 bit, 13379 Hz, master 12, 5 channels
+rom[0x0FF0:0x0FF2] = bytes([0x00, 0xb5])
+# A decoy before m4aSoundInit that passes every field test (42048 Hz). The old search of the 16 KB
+# around SelectSong took the first passing word, i.e. this one; it must not be found.
+w32(0x0E00, 0x009CC500)
 
 # ---- samples ----
 SAW = 0x10000                  # WaveData: type, flags(0x40 loop), freq, loopStart, size, data
@@ -167,10 +174,10 @@ for i, h in enumerate(songs):
 w32(TABLE + 8 * len(songs), 0)
 
 # ---- the second library copy and its table: melody, split, blip ----
-rom[0x8000:0x801E] = rom[0x1000:0x101E]
+rom[0x7F00:0x801E] = rom[0x0F00:0x101E]           # init, main and SelectSong, as above
 TABLE2 = 0x9000
 w32(0x8028, B + TABLE2)
-w32(0x8100, 0x0096C800)        # DA 8 bit, 18157 Hz, master 12, 8 channels
+w32(0x7FE0, 0x0096C800)        # DA 8 bit, 18157 Hz, master 12, 8 channels
 for i, (h, ms) in enumerate([(0x4000, 0), (0x4040, 0), (0x40C0, 2)]):
     struct.pack_into('<IHH', rom, TABLE2 + 8 * i, B + h, ms, ms)
 w32(TABLE2 + 24, 0)

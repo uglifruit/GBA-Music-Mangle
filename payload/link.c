@@ -81,6 +81,8 @@ volatile uint8_t  g_xferSlot   = 0;
 volatile uint8_t  g_xferResult = LINK_RESULT_IDLE;
 volatile uint8_t  g_loadReady  = 0;
 volatile uint16_t g_slotMask   = 0;
+volatile uint16_t g_slotTag[GBA_PATCH_SLOTS];
+volatile uint16_t g_slotTagSeen = 0;
 volatile uint8_t  g_patchBuf[GBA_PATCH_SLOT_BYTES];
 
 static volatile int      g_txPos = 0;
@@ -247,6 +249,13 @@ static void decode_applet(uint32_t got)
         case GBA_OP_SLOTS:
             g_slotMask = (uint16_t)(arg & 0xFFFFu);
             break;
+
+        case GBA_OP_SLOT_TAG: {
+            uint32_t slot = (arg >> 16) & 0xFu;
+            g_slotTag[slot] = (uint16_t)(arg & 0xFFFFu);
+            g_slotTagSeen |= (uint16_t)(1u << slot);
+            break;
+        }
 
         case GBA_OP_AUDEDGE: {
             // Checked, unlike every other CONTROL word: a phantom edge is a phantom drum hit.

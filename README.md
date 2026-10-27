@@ -74,10 +74,34 @@ You don't need anything patched to mangle a song:
   | Left / Right | Nudge the table offset |
 
   Each button can **HOLD** a mangle while pressed, **LATCH** it on and off, or **STEP** its base
-  value. It can also fire a clock, a reset or the next song.
+  value. It can also fire a clock, a reset, the next song, or **CLEAR MANGLES**.
 - The **BASE** page sets each mangle's resting value in its own units: voice shift in programs,
   transpose in semitones, layers in tracks stripped, and so on. CV, knobs and buttons all add on
-  top.
+  top. The page scrolls: there are twenty values.
+- **CLEAR MANGLES** (assign it to a button on the BTN page, or to a CV on MAP) puts every BASE
+  value back to zero and switches off every latched button. It leaves tempo, transpose and fine
+  pitch alone, because those are where the song sits rather than how it's mangled. It can't move a
+  knob or a CV, so anything they're doing carries on.
+
+### Mangling the sound itself
+
+These reach into the engine's own controls, on every voice (samples and Game Boy channels alike):
+
+| Destination | Does |
+|---|---|
+| ATTACK | Up: notes swell in slowly. Down: snappier. |
+| DECAY | Up: notes take longer to fall to their sustain level. Down: shorter. |
+| SUSTAIN | Up: held notes stay louder (organ-like). Down: plucky. |
+| RELEASE | Up: long tails that ring over each other. Down: notes cut dead. |
+| NOTE LENGTH | Up: legato, up to ×4. Down: staccato, down to ¼. |
+| REVERB | Adds to the song's own reverb (the engine's echo). Down removes the song's. |
+| VIBRATO | Wobbles the pitch of every track. A small amount (4–10) is a normal vibrato. |
+| TREMOLO | Wobbles the volume of every track. |
+| LFO SPEED | The vibrato and tremolo rate, ×¼ to ×4 around the engine's usual 5 Hz. |
+
+The envelope changes act on notes already sounding, so holding a button (say B on RELEASE, HOLD,
+amount 40) stretches the tails of whatever is playing. None of these are in the factory map;
+assign them on MAP and BTN.
 
 ### Song tables and sound effects
 
@@ -101,10 +125,12 @@ behave as hits:
 | CV In 1 | **Voice shift:** every instrument swapped for one further along the game's instrument table |
 | CV In 2 | **Transpose,** 1 V/octave, in semitones |
 | Main knob | **Layers:** turning it up strips tracks away from the top down |
-| Knob X | **Tempo** (when not externally clocked), ×0.25 to ×4 |
-| Knob Y | **ROM scrub:** samples are read from elsewhere in the cartridge, a little at first, then a lot |
+| Knob X | **Tempo** (when not externally clocked), ×0.25 to ×4. Around noon is the song's own tempo. |
+| Knob Y | **ROM scrub:** samples are read from elsewhere in the cartridge, a little at first, then a lot. Around noon is off. |
 | Switch up | Bypass every mangle |
 | Switch down | Restart the song |
+
+The knobs have a wide dead zone at noon, so a knob left roughly in the middle changes nothing.
 
 | Output | Carries |
 |---|---|
@@ -117,11 +143,19 @@ Audio comes out of the GBA's own headphone socket.
 
 Other things the MAP page can assign: next song, song select by CV, table offset (reads the
 instrument table from the wrong place), solo, fine pitch, reverse (a chance each note plays
-backwards), and crush.
+backwards), crush, the sound destinations above, and CLEAR MANGLES (a gate clears them).
+
+The CAL page shows SVC, the share of each millisecond the modulator and clock take.
 
 The MEM page saves the maps, base values and settings to the Workshop's 16 memory slots. A saved
 slot also remembers the song table, list, song and mutes, and restores them when loaded with the
 same game inserted.
+
+**A saved slot also skips the scan.** Each save remembers which cart it was made on and where that
+cart's music is. When you boot with the same cart in (same game and revision), the GBA finds that
+slot, loads it, and starts playing in about a second instead of scanning. If several slots were
+saved on the cart, the lowest-numbered one is used. Hold **B** while it says CHECKING SAVED SLOTS
+to scan instead, and SET > RESCAN CART always scans.
 
 ## Building
 
