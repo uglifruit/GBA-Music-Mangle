@@ -50,9 +50,20 @@ typedef struct {
     int16_t  release;         // + longer tails, - notes cut short
     int16_t  gate;            // note length at note-on: + up to x4, - down to x1/4 (TIEs unchanged)
     int8_t   reverb;          // added to the song's own reverb (m4a's echo), -127..127
-    uint8_t  vibrato;         // the engine's LFO on every track's pitch, depth 0..63 (m4a MOD units)
-    uint8_t  tremolo;         // the same LFO on every track's volume, depth 0..63
+    int8_t   vibrato;         // the engine's LFO on every track's pitch, depth -63..63 (m4a MOD
+                              // units): + a triangle (vibrato), - a square (a trill)
+    int8_t   tremolo;         // the same LFO on every track's volume: + triangle, - square (a gate)
     uint8_t  lfoSpeed;        // that LFO's speed per frame (m4a LFOS units; 22 is m4a's default)
+    // CHAOS, 0..255: each note rolls dice for interval jumps, hard pans, instrument swaps, reverse,
+    // random starts, stretched or chopped lengths and (above 128) raw cart data as its sample. The
+    // more chaos, the likelier and wilder. The dice come from their own generator, reseeded at the
+    // start and on every loop, so the chaos is a PATTERN that repeats; player_chaos_reroll() deals
+    // a new one.
+    uint8_t  chaos;
+    // ---- the other half of the one-sided hooks (2026-10-27) ----
+    uint8_t  sampleEnd;       // cut this much off each sample's end, /256 of its length (a chop)
+    uint8_t  dropChance;      // 0..255: chance a note is dropped (it still moves the follower)
+    uint8_t  chaosFree;       // 1 = CHAOS never reseeds: new dice every time, not a pattern
 } PlayerMods;
 
 // The envelope values in force for a channel, with the hooks above applied: which = 0 attack,
@@ -155,3 +166,30 @@ void     player_update(void);                // apply mods + volume/pitch change
 void     player_frame(void);                 // the ~60 Hz envelope step (DS + CGB)
 uint32_t player_tempo_i(void);               // tempoD x tempoU >> 8: ticks/frame x 150
 unsigned pl_env(const Chan *c, int which);   // PL_ENV_*: the envelope value in force (see above)
+void     player_chaos_reroll(void);          // a new CHAOS pattern, from now and on every loop
+
+// ---- sections ----------------------------------------------------------------------------------
+// MP2K has no section markers, but every looping song has a loop point (each track's backward
+// GOTO, all jumping together), and the tick count gives a bar grid.
+//   player_restart_loop()  every track to its loop point - skipping the intro - with the tied
+//                          notes released. The points are read ahead from the track data when the
+//                          song starts. A song with no loop point restarts instead.
+//   player_restart_bar()   back to the last section line: at every g_plBarTicks ticks the player
+//                          keeps a copy of all the tracks (and the tempo, tick count and CHAOS
+//                          dice), and this puts it back. Sounding notes ring on; tied ones are
+//                          released. Fed from a clock divider it is a beat-repeat.
+// Call between ticks (mod.c does, from the main loop, as player_tick() is called).
+extern uint16_t g_plBarTicks;                // section length, ticks: 24, 48, 96, 192 or 384
+void     player_restart_loop(void);
+void     player_restart_bar(void);
+// Or at the next section line (SET > RESTARTS = AT BAR END): the restart waits in g_plQueued and
+// player_tick() does it at the top of the first tick on the line, so it lands on the grid with no
+// clock realignment. A later request replaces an earlier one; a new song clears it.
+#define PL_RESTART_SONG 1
+#define PL_RESTART_LOOP 2
+#define PL_RESTART_BAR  3
+extern uint8_t g_plQueued;                   // PL_RESTART_*, 0 = none
+void     player_queue_restart(uint8_t what);
+// REPEAT BAR (the switch held up): while set, each section line jumps back to the section that
+// is ending, so the section playing when it was set loops until it is cleared.
+extern uint8_t g_plHoldBar;

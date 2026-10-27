@@ -23,41 +23,47 @@
 
 const char *src_name[SRC_COUNT]   = { "CV1", "CV2", "AU1", "AU2", "PU2", "MAIN", "X", "Y" };
 const char *dest_name[DEST_COUNT] = {
-    "---", "CLOCK", "RESET", "NEXT SONG", "SONG", "VOICE SHIFT", "TABLE OFFSET", "SAMPLE START",
-    "ROM SCRUB", "LAYERS", "SOLO", "TRANSPOSE", "FINE PITCH", "TEMPO", "REVERSE", "CRUSH",
-    "ATTACK", "DECAY", "SUSTAIN", "RELEASE", "NOTE LENGTH", "REVERB", "VIBRATO", "TREMOLO",
-    "LFO SPEED", "CLEAR MANGLES",
+    "---", "CLOCK", "RESET", "NEXT SONG", "SONG", "VOICE SHIFT", "TABLE OFFSET", "START / END",
+    "ROM SCRUB", "LAYERS", "SOLO / MUTE", "TRANSPOSE", "FINE PITCH", "TEMPO", "REVERSE/DROP", "CRUSH",
+    "ATTACK", "DECAY", "SUSTAIN", "RELEASE", "NOTE LENGTH", "REVERB", "VIBRATO/TRILL", "TREMOLO/GATE",
+    "LFO SPEED", "CLEAR MANGLES", "CHAOS", "REROLL CHAOS", "RESTART LOOP", "RESTART BAR",
 };
 const char *dest_short[DEST_COUNT] = {
     "---", "CLK", "RST", "NXT", "SNG", "VSH", "TBL", "SST", "SCR", "LAY", "SOL", "TRN", "PIT",
     "TMP", "REV", "CRU", "ATK", "DCY", "SUS", "REL", "LEN", "RVB", "VIB", "TRM", "LFO", "CLR",
+    "CHS", "RRL", "RLP", "RBR",
 };
 const char *btn_mode_name[BTN_MODES] = { "HOLD", "LATCH", "STEP" };
 const char *btn_name[BTN_SLOTS] = { "A", "B", "L", "R", "UP", "DOWN", "LEFT", "RIGHT" };
 const uint16_t btn_key[BTN_SLOTS] = { KEY_A, KEY_B, KEY_L, KEY_R, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT };
-const char *swu_name[SWU_COUNT] = { "NOTHING", "BYPASS", "PAUSE" };
+const char *swu_name[SWU_COUNT] = { "NOTHING", "BYPASS", "PAUSE", "REPEAT BAR" };
 const char *swd_name[SWD_COUNT] = { "NOTHING", "RESTART", "NEXT SONG" };
 const uint32_t scrub_len[SCRUB_LEN_COUNT] = { 1024, 2048, 4096, 8192, 16384, 32768, 65536 };
+const uint16_t bar_len[BAR_LEN_COUNT] = { 24, 48, 96, 192, 384 };
+const char *bar_len_name[BAR_LEN_COUNT] = { "1 BEAT", "2 BEATS", "1 BAR", "2 BARS", "4 BARS" };
 
 #define KIND_EDGE 0
 #define KIND_POS  1
 #define KIND_BIP  2
+// Every value destination is BIP since 2026-10-27: each one-sided mangle got a meaning for its
+// negative half (START/END, LAYERS from the bottom, SOLO/MUTE, REVERSE/DROP, rate/bit CRUSH,
+// TRILL, GATE, free CHAOS). KIND_POS stays for any future destination that has no other side.
 static const uint8_t s_kind[DEST_COUNT] = {
-    KIND_BIP,  KIND_EDGE, KIND_EDGE, KIND_EDGE, KIND_BIP, KIND_BIP, KIND_BIP, KIND_POS,
-    KIND_BIP,  KIND_POS,  KIND_POS,  KIND_BIP,  KIND_BIP, KIND_BIP, KIND_POS, KIND_POS,
-    KIND_BIP,  KIND_BIP,  KIND_BIP,  KIND_BIP,  KIND_BIP, KIND_BIP, KIND_POS, KIND_POS,
-    KIND_BIP,  KIND_EDGE,
+    KIND_BIP,  KIND_EDGE, KIND_EDGE, KIND_EDGE, KIND_BIP, KIND_BIP, KIND_BIP, KIND_BIP,
+    KIND_BIP,  KIND_BIP,  KIND_BIP,  KIND_BIP,  KIND_BIP, KIND_BIP, KIND_BIP, KIND_BIP,
+    KIND_BIP,  KIND_BIP,  KIND_BIP,  KIND_BIP,  KIND_BIP, KIND_BIP, KIND_BIP, KIND_BIP,
+    KIND_BIP,  KIND_EDGE, KIND_BIP,  KIND_EDGE, KIND_EDGE, KIND_EDGE,
 };
 
 // BASE ranges, in each destination's own units (see the BASE page and mod_update):
 //   VSHIFT programs, TABLE bytes, START /128 of the sample, SCRUB a virtual knob, LAYERS tracks
 //   stripped, SOLO track (0 = none), TRANS semitones, PITCH cents, TEMPO a virtual knob, REVERSE
 //   /128 chance, CRUSH steps; ATTACK DECAY SUSTAIN RELEASE LENGTH and LFO SPEED virtual knobs,
-//   REVERB level added to the song's, VIBRATO and TREMOLO depth.
-static const int8_t s_baseMin[DEST_COUNT] = { 0, 0, 0, 0, 0, -64, -127,   0, -127,  0,  0, -48, -100, -127,   0,  0,
-                                              -127, -127, -127, -127, -127, -127,  0,  0, -127, 0 };
+//   REVERB level added to the song's, VIBRATO and TREMOLO depth, CHAOS amount (x2 = 0..254).
+static const int8_t s_baseMin[DEST_COUNT] = { 0, 0, 0, 0, 0, -64, -127, -127, -127, -15, -16, -48, -100, -127, -127, -15,
+                                              -127, -127, -127, -127, -127, -127, -63, -63, -127, 0, -127, 0, 0, 0 };
 static const int8_t s_baseMax[DEST_COUNT] = { 0, 0, 0, 0, 0,  63,  127, 127,  127, 15, 16,  48,  100,  127, 127, 15,
-                                               127,  127,  127,  127,  127,  127, 63, 63,  127, 0 };
+                                               127,  127,  127,  127,  127,  127, 63, 63,  127, 0, 127, 0, 0, 0 };
 
 int dest_is_edge(int d)  { return d > 0 && d < DEST_COUNT && s_kind[d] == KIND_EDGE; }
 int dest_has_base(int d) { return d > 0 && d < DEST_COUNT && s_baseMax[d] != s_baseMin[d]; }
@@ -71,6 +77,7 @@ _Static_assert(sizeof(Patch) <= GBA_PATCH_SLOT_BYTES, "Patch no longer fits a fl
 // The host reads the cart tag at a fixed offset (GBA_OP_SLOT_TAG); it must never move.
 _Static_assert(__builtin_offsetof(Patch, cartTag) == GBA_PATCH_TAG_OFFSET, "cartTag moved");
 _Static_assert(PATCH_TABLES == SCAN_MAX_TABLES, "the saved table list must hold every table");
+_Static_assert(DEST_COUNT <= DEST_MAX, "more destinations than Patch.base[] holds: append a new array");
 int      g_song    = -1;
 uint16_t g_uiMute  = 0;
 uint8_t  g_uiSolo  = 0xFF;
@@ -128,14 +135,14 @@ static inline __attribute__((always_inline)) int32_t clampi(int32_t v, int32_t l
 static void default_buttons(Patch *p)
 {
     static const BtnSlot factory[BTN_SLOTS] = {
-        { DEST_REVERSE, 63, BTN_HOLD },     // A
-        { DEST_CRUSH,   63, BTN_HOLD },     // B
-        { DEST_VSHIFT,  -1, BTN_STEP },     // L
-        { DEST_VSHIFT,   1, BTN_STEP },     // R
+        { DEST_RBAR,     0, BTN_HOLD },     // A      tap to stutter
+        { DEST_REROLL,   0, BTN_HOLD },     // B      a new chaos pattern
+        { DEST_REVERSE, 63, BTN_HOLD },     // L
+        { DEST_CRUSH,   63, BTN_HOLD },     // R
         { DEST_TRANS,    1, BTN_STEP },     // UP
         { DEST_TRANS,   -1, BTN_STEP },     // DOWN
-        { DEST_TABLE,   -1, BTN_STEP },     // LEFT
-        { DEST_TABLE,    1, BTN_STEP },     // RIGHT
+        { DEST_CLEAR,    0, BTN_HOLD },     // LEFT   back to clean (tempo and pitch stay)
+        { DEST_CHAOS,   16, BTN_STEP },     // RIGHT  chaos up, 32 a press
     };
     for (int i = 0; i < BTN_SLOTS; i++) {
         p->btn[i].dest   = factory[i].dest;
@@ -157,12 +164,13 @@ void mod_default_patch(void)
     g_patch.follow   = 0;
     g_patch.repeat   = 1;
     g_patch.scrubLenIx = 2;               // 4096 samples
-    g_patch.swUp     = SWU_BYPASS;
+    g_patch.swUp     = SWU_REPEAT;
     g_patch.swDown   = SWD_RESET;
     g_patch.cartSafe = 0;
+    g_patch.barLenIx = BAR_LEN_DEFAULT;
 
     static const uint8_t factory[SRC_COUNT] = {
-        DEST_VSHIFT, DEST_TRANS, DEST_RESET, DEST_START, DEST_CLOCK, DEST_LAYERS, DEST_TEMPO, DEST_SCRUB,
+        DEST_VSHIFT, DEST_TRANS, DEST_RESET, DEST_RBAR, DEST_CLOCK, DEST_CHAOS, DEST_TEMPO, DEST_SCRUB,
     };
     for (int s = 0; s < SRC_COUNT; s++) {
         g_patch.mod[s].dest  = factory[s];
@@ -189,14 +197,20 @@ int mod_patch_accept(Patch *p)
         default_buttons(p);
         p->version = 2;
     }
-    // v2 -> v3: BASE moved to the end at full size. The new destinations start at 0.
-    if (p->version == 2) {
-        for (int d = 0; d < DEST_COUNT; d++) p->base[d] = d < DEST_COUNT_V2 ? p->baseV2[d] : 0;
+    // BASE has lived in three places: baseV2 (v2), baseV3 (v3, v4) and base (v5). Bring an older
+    // patch's values into base[]; destinations it did not know start at 0. The cart fields of a
+    // v3 arrived as zeros, which already means "no tables saved".
+    if (p->version == 2 || p->version == 3 || p->version == 4) {
+        int n = p->version == 2 ? DEST_COUNT_V2 : DEST_COUNT_V3;
+        for (int d = 0; d < DEST_MAX; d++) p->base[d] = d < n ? (p->version == 2 ? p->baseV2[d] : p->baseV3[d]) : 0;
         for (int d = 0; d < DEST_COUNT_V2; d++) p->baseV2[d] = 0;
-        p->version = 3;
+        for (int d = 0; d < DEST_COUNT_V3; d++) p->baseV3[d] = 0;
+        p->barLenIx = BAR_LEN_DEFAULT;                    // was padding before v5
+        p->restartQ = 0;
+        p->version = 5;
     }
-    // v3 -> v4: the cart fields arrived as zeros, which already means "no tables saved".
-    if (p->version == 3) p->version = 4;
+    if (p->barLenIx >= BAR_LEN_COUNT) p->barLenIx = BAR_LEN_DEFAULT;
+    if (p->restartQ > 1) p->restartQ = 0;
     if (p->tableCount > PATCH_TABLES) p->tableCount = 0;
 
     for (int i = 0; i < BTN_SLOTS; i++) {
@@ -216,6 +230,7 @@ void mod_patch_applied(void)
     g_plRepeat    = g_patch.repeat;
     g_mixGain     = g_patch.gain;
     g_mods.scrubLen = scrub_len[g_patch.scrubLenIx];
+    g_plBarTicks  = bar_len[g_patch.barLenIx < BAR_LEN_COUNT ? g_patch.barLenIx : BAR_LEN_DEFAULT];
     rom_set_speed(g_patch.cartSafe ? ROM_SPEED_SAFE : ROM_SPEED_FAST);
 }
 
@@ -469,6 +484,7 @@ IWRAM_CODE void mod_update(void)
     uint8_t sw = g_switch;
     g_bypass = (sw == 2 && g_patch.swUp == SWU_BYPASS);
     g_clkRun = !(sw == 2 && g_patch.swUp == SWU_PAUSE);
+    g_plHoldBar = (uint8_t)(sw == 2 && g_patch.swUp == SWU_REPEAT);
     if (sw == 0 && s_lastSwitch != 0) {
         if (g_patch.swDown == SWD_RESET) edgeN[DEST_RESET]++;
         else if (g_patch.swDown == SWD_NEXT) edgeN[DEST_NEXT]++;
@@ -478,8 +494,17 @@ IWRAM_CODE void mod_update(void)
     // ---- edges: song changes and resets first, then the clock, so a reset and the pulse it was
     //      patched alongside land as "restart, then tick 0" ----
     if (g_song >= 0) {
+        // Each restart is followed by clock_reset(), as RESET's is: the restarted spot's first tick
+        // plays at once (INT), or on the pulse it arrived with (EXT).
+        // AT BAR END queues them instead: the player does it on the next section line, on the grid.
+        int q = g_patch.restartQ;
         if (edgeN[DEST_NEXT]) mod_song_step(1);
-        else if (edgeN[DEST_RESET]) mod_restart();
+        else if (edgeN[DEST_RESET]) { if (q) player_queue_restart(PL_RESTART_SONG); else mod_restart(); }
+        else if (edgeN[DEST_RLOOP]) {
+            if (q) player_queue_restart(PL_RESTART_LOOP); else { player_restart_loop(); clock_reset(); }
+        } else if (edgeN[DEST_RBAR]) {
+            if (q) player_queue_restart(PL_RESTART_BAR); else { player_restart_bar(); clock_reset(); }
+        }
         if (mapped[DEST_SONG]) {
             int off = (int)(g_destVal[DEST_SONG] / 128);         // +-16 songs
             if (off != s_songCvOff) {
@@ -490,6 +515,7 @@ IWRAM_CODE void mod_update(void)
     }
     for (uint8_t n = edgeN[DEST_CLOCK]; n; n--) clock_pulse();
     if (edgeN[DEST_CLEAR]) clear_mangles();
+    if (edgeN[DEST_REROLL]) player_chaos_reroll();
 
     // ---- the mangles: CV + buttons (dv) plus the BASE value, each in its own units ----
     int bypass = g_bypass;
@@ -501,12 +527,19 @@ IWRAM_CODE void mod_update(void)
         g_crushHold = 1; g_crushMask = 0xFF;
         g_mods.attack = 0; g_mods.decay = 0; g_mods.sustain = 0; g_mods.release = 0; g_mods.gate = 0;
         g_mods.reverb = 0; g_mods.vibrato = 0; g_mods.tremolo = 0; g_mods.lfoSpeed = 22;
+        g_mods.chaos = 0; g_mods.chaosFree = 0; g_mods.sampleEnd = 0; g_mods.dropChance = 0;
     } else {
         // Divides, not shifts: a shift floors, and -1 >> 5 is a whole program down.
         g_mods.voiceShift    = (int16_t)clampi(dv[DEST_VSHIFT] / 32 + bs[DEST_VSHIFT], -127, 127);
         g_mods.tableOffset   = (int16_t)(dv[DEST_TABLE] + bs[DEST_TABLE]);
-        g_mods.sampleStart   = (uint8_t)clampi((dv[DEST_START] >> 3) + bs[DEST_START] * 2, 0, 255);
-        g_mods.reverseChance = (uint8_t)clampi((dv[DEST_REVERSE] >> 3) + bs[DEST_REVERSE] * 2, 0, 255);
+        // Each of these two has a second meaning below zero: START cuts the END off instead, and
+        // REVERSE becomes a chance to DROP the note.
+        int32_t st = clampi(dv[DEST_START] / 8 + bs[DEST_START] * 2, -255, 255);
+        g_mods.sampleStart   = (uint8_t)(st > 0 ? st : 0);
+        g_mods.sampleEnd     = (uint8_t)(st < 0 ? -st : 0);
+        int32_t rv = clampi(dv[DEST_REVERSE] / 8 + bs[DEST_REVERSE] * 2, -255, 255);
+        g_mods.reverseChance = (uint8_t)(rv > 0 ? rv : 0);
+        g_mods.dropChance    = (uint8_t)(rv < 0 ? -rv : 0);
         g_mods.romScrub      = scrub_offset(clampi(dv[DEST_SCRUB] + bs[DEST_SCRUB] * 16, -2047, 2047));
 
         // Transpose: 1V/oct at depth 63. One volt is 341.33 counts, so a semitone at depth 63 is
@@ -526,15 +559,22 @@ IWRAM_CODE void mod_update(void)
         g_mods.release = (int16_t)clampi(dv[DEST_RELEASE] + bs[DEST_RELEASE] * 16, -2047, 2047);
         g_mods.gate    = (int16_t)clampi(dv[DEST_LENGTH]  + bs[DEST_LENGTH]  * 16, -2047, 2047);
         g_mods.reverb  = (int8_t)clampi(dv[DEST_REVERB] / 16 + bs[DEST_REVERB], -127, 127);
-        g_mods.vibrato = (uint8_t)clampi(dv[DEST_VIBRATO] / 32 + bs[DEST_VIBRATO], 0, 63);
-        g_mods.tremolo = (uint8_t)clampi(dv[DEST_TREMOLO] / 32 + bs[DEST_TREMOLO], 0, 63);
+        g_mods.vibrato = (int8_t)clampi(dv[DEST_VIBRATO] / 32 + bs[DEST_VIBRATO], -63, 63);   // - = trill
+        g_mods.tremolo = (int8_t)clampi(dv[DEST_TREMOLO] / 32 + bs[DEST_TREMOLO], -63, 63);   // - = gate
         // LFO SPEED: m4a's default 22 per frame (about 5 Hz), x1/4 .. x4 on TEMPO's curve.
         g_mods.lfoSpeed = (uint8_t)clampi((int32_t)((22u * tempo_scale(clampi(dv[DEST_LFO] + bs[DEST_LFO] * 16,
                                                                              -2048, 2047))) >> 8), 1, 255);
 
-        int32_t c = clampi((dv[DEST_CRUSH] >> 7) + bs[DEST_CRUSH], 0, 15);
-        g_crushHold = (uint8_t)(1 + (c >> 1));
-        g_crushMask = (uint8_t)(0xFFu << (c >> 2));
+        // CHAOS: the amount either way; below zero it is FREE (never reseeded, so never repeats).
+        int32_t cz = clampi(dv[DEST_CHAOS] / 8 + bs[DEST_CHAOS] * 2, -255, 255);
+        g_mods.chaos     = (uint8_t)(cz < 0 ? -cz : cz);
+        g_mods.chaosFree = (uint8_t)(cz < 0);
+
+        // CRUSH: above zero the sample rate (sample-and-hold, up to 12 samples: about 1.4 kHz),
+        // below zero the bits (down to one). Each side is one effect, so they can be told apart.
+        int32_t c = clampi(dv[DEST_CRUSH] / 128 + bs[DEST_CRUSH], -15, 15);
+        g_crushHold = (uint8_t)(c > 0 ? 1 + ((c * 3) >> 2) : 1);
+        g_crushMask = (uint8_t)(c < 0 ? 0xFFu << ((-c) >> 1) : 0xFFu);
     }
 
     // ---- mute: the PLAY page, then LAYERS and SOLO ----
@@ -543,18 +583,31 @@ IWRAM_CODE void mod_update(void)
     uint16_t mute = g_uiMute;
     if (g_uiSolo < PL_TRACKS) mute |= (uint16_t)(all & ~(1u << g_uiSolo));
     if (!bypass) {
-        // LAYERS: tracks stripped from the top. CV full scale strips all but track 1.
+        // LAYERS: above zero tracks are stripped from the top (track 1 always stays), below zero
+        // from the bottom (the last track always stays). Full scale strips all but that one.
         int strip = bs[DEST_LAYERS];
-        if (mapped[DEST_LAYERS]) strip += (int)(((uint32_t)dv[DEST_LAYERS] * (uint32_t)tc) >> 11);
-        int keep = tc - strip;
-        if (keep < 1) keep = 1;
-        if (keep < tc) mute |= (uint16_t)(all & ~((1u << keep) - 1u));
-        // SOLO: the BASE value picks a track outright; otherwise the CV level does.
-        int k = -1;
-        if (bs[DEST_SOLO] > 0) k = bs[DEST_SOLO] - 1;
-        else if (mapped[DEST_SOLO] && dv[DEST_SOLO] > 0) k = (int)(((uint32_t)dv[DEST_SOLO] * (uint32_t)tc) >> 11);
-        if (k >= tc) k = tc - 1;
-        if (k >= 0) mute |= (uint16_t)(all & ~(1u << k));
+        if (mapped[DEST_LAYERS]) strip += (int)(dv[DEST_LAYERS] * tc / 2048);
+        if (strip > 0) {
+            int keep = tc - strip;
+            if (keep < 1) keep = 1;
+            if (keep < tc) mute |= (uint16_t)(all & ~((1u << keep) - 1u));
+        } else if (strip < 0) {
+            int cut = -strip;
+            if (cut > tc - 1) cut = tc - 1;
+            mute |= (uint16_t)((1u << cut) - 1u);
+        }
+        // SOLO: +n solos track n, -n MUTES track n. The BASE value picks it outright; otherwise
+        // the CV level does, either way from zero.
+        int k = bs[DEST_SOLO];
+        if (!k && mapped[DEST_SOLO] && dv[DEST_SOLO]) {
+            int32_t a = dv[DEST_SOLO] < 0 ? -dv[DEST_SOLO] : dv[DEST_SOLO];
+            int n = (int)((a * tc) >> 11) + 1;
+            k = dv[DEST_SOLO] > 0 ? n : -n;
+        }
+        if (k > tc) k = tc;
+        if (k < -tc) k = -tc;
+        if (k > 0) mute |= (uint16_t)(all & ~(1u << (k - 1)));
+        else if (k < 0) mute |= (uint16_t)(1u << (-k - 1));
     }
     g_mods.mute = mute;
 

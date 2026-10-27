@@ -284,7 +284,9 @@ static void play_draw(void)
     a = put_str(t, a, ":");
     put_dec(t, a, (g_plTicks / 24) % 4 + 1, 1);
     field(3, 110, 33, 9, t, COL_MID);
-    field(4, 170, 33, 7, g_bypass ? "BYPASS" : g_perform ? "PERFORM" : "", g_bypass ? COL_WAIT : COL_TITLE);
+    field(4, 170, 33, 7, g_plQueued ? "QUEUED" : g_plHoldBar ? "REPEAT" : g_bypass ? "BYPASS"
+                         : g_perform ? "PERFORM" : "",
+          (g_bypass || g_plQueued || g_plHoldBar) ? COL_WAIT : COL_TITLE);
     bar(0, 220, 33, 14, 7, ((g_plTicks % 24) < 4 && player_running()) ? 14 : 0, COL_TITLE);
 
     // Tracks: two columns of eight.
@@ -315,9 +317,9 @@ static void play_draw(void)
     a = put_str(t, a, " TBL");
     a = put_sdec(t, a, g_mods.tableOffset, 4);
     a = put_str(t, a, " SST");
-    a = put_dec(t, a, g_mods.sampleStart, 3);
+    a = put_sdec(t, a, (int)g_mods.sampleStart - (int)g_mods.sampleEnd, 3);
     a = put_str(t, a, " REV");
-    put_dec(t, a, g_mods.reverseChance, 3);
+    put_sdec(t, a, (int)g_mods.reverseChance - (int)g_mods.dropChance, 3);
     field(40, 4, 126, 38, t, COL_MID);
 
     a = put_str(t, 0, "SCR");
@@ -427,17 +429,18 @@ static void btn_draw(void)
 
 // ---- BASE -------------------------------------------------------------------------------------
 
-#define BASE_ROWS    20
+#define BASE_ROWS    21
 #define BASE_VISIBLE 11                  // rows on screen; the window follows the cursor
 static const uint8_t s_baseDest[BASE_ROWS] = {
     DEST_VSHIFT, DEST_TABLE, DEST_START, DEST_SCRUB, DEST_LAYERS, DEST_SOLO,
     DEST_TRANS, DEST_PITCH, DEST_TEMPO, DEST_REVERSE, DEST_CRUSH,
     DEST_ATTACK, DEST_DECAY, DEST_SUSTAIN, DEST_RELEASE, DEST_LENGTH, DEST_REVERB,
-    DEST_VIBRATO, DEST_TREMOLO, DEST_LFO,
+    DEST_VIBRATO, DEST_TREMOLO, DEST_LFO, DEST_CHAOS,
 };
 static const char *s_baseUnit[BASE_ROWS] = {
-    "PROGRAMS", "BYTES", "/128", "KNOB", "STRIPPED", "", "SEMITONES", "CENTS", "KNOB", "/128", "STEPS",
-    "KNOB", "KNOB", "KNOB", "KNOB", "KNOB", "LEVEL", "DEPTH", "DEPTH", "KNOB",
+    "PROGRAMS", "BYTES", "+STRT-END", "KNOB", "+TOP-BTM", "", "SEMITONES", "CENTS", "KNOB", "+REV-DROP",
+    "+RATE-BIT",
+    "KNOB", "KNOB", "KNOB", "KNOB", "KNOB", "LEVEL", "+SINE-SQR", "+SINE-SQR", "KNOB", "+RPT-FREE",
 };
 static int s_baseTop;
 
@@ -468,7 +471,7 @@ static void base_draw(void)
         field(r * 3 + 0, 4, y, 13, dest_name[dest], sel ? COL_SEL : COL_DIM);
         if (dest == DEST_SOLO) {
             if (v == 0) put_str(t, 0, "OFF");
-            else { int a = put_str(t, 0, "TRACK "); put_dec(t, a, (uint32_t)v, 1); }
+            else { int a = put_str(t, 0, v > 0 ? "SOLO " : "MUTE "); put_dec(t, a, (uint32_t)(v > 0 ? v : -v), 1); }
         } else if (base_min(dest) < 0) {
             put_sdec(t, 0, v, 1);
         } else {
@@ -493,17 +496,19 @@ static void base_draw(void)
 #define SET_GAIN    5
 #define SET_FOLLOW  6
 #define SET_REPEAT  7
-#define SET_SCRUB   8
-#define SET_SWUP    9
-#define SET_SWDN    10
-#define SET_CART    11
-#define SET_RESCAN  12
-#define SET_FACTORY 13
-#define SET_ITEMS   14
+#define SET_BARLEN  8
+#define SET_RESTQ   9
+#define SET_SCRUB   10
+#define SET_SWUP    11
+#define SET_SWDN    12
+#define SET_CART    13
+#define SET_RESCAN  14
+#define SET_FACTORY 15
+#define SET_ITEMS   16
 
 static const char *set_label[SET_ITEMS] = {
     "CLOCK", "PPQN", "SONG TABLE", "SONG LIST", "VOICES", "GAIN", "CV FOLLOWS", "SONG END",
-    "SCRUB LEN", "SWITCH UP", "SWITCH DOWN", "CART SPEED", "RESCAN CART", "FACTORY SET",
+    "RESTART BAR", "RESTARTS", "SCRUB LEN", "SWITCH UP", "SWITCH DOWN", "CART SPEED", "RESCAN CART", "FACTORY SET",
 };
 static const char *clk_name[3] = { "AUTO", "INTERNAL", "EXTERNAL" };
 
@@ -528,6 +533,8 @@ static void set_keys(uint16_t k)
     case SET_GAIN:   p->gain       = (uint8_t)step_clamp(p->gain, d, 1, 48); break;
     case SET_FOLLOW: p->follow     = (uint8_t)step_wrap(p->follow, d, PL_TRACKS); break;
     case SET_REPEAT: if (d) p->repeat ^= 1; break;
+    case SET_BARLEN: p->barLenIx   = (uint8_t)step_clamp(p->barLenIx, d, 0, BAR_LEN_COUNT - 1); break;
+    case SET_RESTQ:  if (d) p->restartQ ^= 1; break;
     case SET_SCRUB:  p->scrubLenIx = (uint8_t)step_clamp(p->scrubLenIx, d, 0, SCRUB_LEN_COUNT - 1); break;
     case SET_SWUP:   p->swUp       = (uint8_t)step_wrap(p->swUp, d, SWU_COUNT); break;
     case SET_SWDN:   p->swDown     = (uint8_t)step_wrap(p->swDown, d, SWD_COUNT); break;
@@ -548,7 +555,7 @@ static void set_draw(void)
     char t[40];
     const Patch *p = &g_patch;
     for (int i = 0; i < SET_ITEMS; i++) {
-        int y = 15 + i * 10;
+        int y = 14 + i * 9;                     // 16 rows: 9 px apart to fit
         int cur = (i == s_cursor[PAGE_SET]);
         field(i * 2, 4, y, 12, set_label[i], cur ? COL_SEL : COL_DIM);
         int a = 0;
@@ -575,6 +582,8 @@ static void set_draw(void)
             break;
         case SET_FOLLOW: a = put_str(t, 0, "TRACK "); put_dec(t, a, (uint32_t)p->follow + 1, 1); break;
         case SET_REPEAT: put_str(t, 0, p->repeat ? "REPEAT" : "STOP"); break;
+        case SET_BARLEN: put_str(t, 0, bar_len_name[p->barLenIx < BAR_LEN_COUNT ? p->barLenIx : 2]); break;
+        case SET_RESTQ:  put_str(t, 0, p->restartQ ? "AT BAR END" : "NOW"); break;
         case SET_SCRUB:  a = put_dec(t, 0, scrub_len[p->scrubLenIx], 1); put_str(t, a, " SAMPLES"); break;
         case SET_SWUP:   put_str(t, 0, swu_name[p->swUp]); break;
         case SET_SWDN:   put_str(t, 0, swd_name[p->swDown]); break;
@@ -769,7 +778,7 @@ void ui_scan_begin(void)
     invalidate();
     bars_invalidate();
     s_drawn = 0xFF;
-    text_centre(20, "GBA CART PLAYER", COL_TITLE, 2);
+    text_centre(20, "GBA MUSIC MANGLE", COL_TITLE, 2);
     char t[40];
     int a = put_str(t, 0, g_romTitle[0] ? g_romTitle : "NO CARTRIDGE");
     if (g_romCode[0]) { a = put_str(t, a, "  "); put_str(t, a, g_romCode); }

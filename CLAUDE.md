@@ -1,4 +1,4 @@
-# GBA Cart Player — Claude working notes
+# GBA Music Mangle — Claude working notes
 
 GBA Multiboot link for the Music Thing Modular **Workshop Computer**. The Workshop boots a GBA that
 has a **commercial cartridge inserted**. The payload scans the cart for Nintendo's MP2K
@@ -15,7 +15,9 @@ an assistant.
   layers** (multiboot, the serial link, the inverted pulse pins, the inter-word gap, the protocol
   rules, the DMA-ring audio design, IWRAM placement, the `-nostdlib` tripwire, the UI rules, the HAL
   fixes, `info.yaml` and the validator). None of it is repeated here, and all of it applies.
-- **Repo: `uglifruit/GBA_CartPlayer`** (private, created 2026-10-26). No card number yet.
+- **Repo: `uglifruit/GBA-Music-Mangle`** (private, created 2026-10-26 as `GBA_CartPlayer`, renamed
+  2026-10-27; GitHub redirects the old URL). Code comments still say "GBA Cart Player": the same
+  card. No card number yet.
 - **The player (`payload/player.c`, `cgb.c`, `cgb.h`) was written by an outside developer** against
   `docs/PLAYER_SPEC.md`, on branch `codex/mp2k-player`, merged 2026-10-26. It passed the spec's checks.
   **The spec is the contract**: `player.h` is its interface. Changing a hook's meaning means
@@ -147,28 +149,61 @@ an assistant.
 - **PERFORM mode turns off auto-repeat.** A held button is a HOLD, and a repeat would turn one STEP
   press into a stream. `modtest` checks this.
 - `tools/pcplay/modtest` drives `mod_update()` with stubbed link inputs and simulated keys
-  (`g_hostIo[0x130]`, active low). 74 checks, all passing 2026-10-27. Run it after touching
+  (`g_hostIo[0x130]`, active low). 98 checks, all passing 2026-10-27. Run it after touching
   `mod.c`.
 
 - The FM card's division of labour: raw inputs arrive, and all meaning is in `g_patch.mod[]`.
+  (The factory map's description here predates the performance set; mod.h has the current one.)
 - Destination kinds: **EDGE** (clock/reset/next), **POS** (only the positive half acts, so an
   unpatched input or a centred knob never mangles anything), **BIP**. The POS choice was made so the
-  factory map is inert at rest: MAIN → LAYERS strips tracks only when turned *up*.
+  factory map is inert at rest: MAIN → CHAOS does nothing in the noon detent (left is free chaos, right the repeating kind).
 - Transpose is 1V/oct at **depth 63**: a semitone is 1792 in v×depth units.
 - The follower drops the gate for 3 ms on a new note while the gate is high, so legato notes
   retrigger downstream envelopes.
-- **Patch magic `'MP'` (0x4D50), `PATCH_VERSION 4`.** The FM card's rules apply: bump the version
+- **Patch magic `'MP'` (0x4D50), `PATCH_VERSION 5`.** The FM card's rules apply: bump the version
   for any change of layout *or* meaning, and prefer appending + migrating. v2 APPENDED table, list,
   BASE and BTN; `mod_patch_accept()` migrates a zero-padded v1 by giving it the factory buttons.
   **v3 (2026-10-27) added ten destinations.** BASE couldn't grow in place (BTN follows it), so v2's
   array is `baseV2[16]` (migrated, then zeroed) and a full `base[DEST_COUNT]` is appended. The
   scene (table, list, song, mutes) restores only when the game code matches. v4 appended the cart
   and its tables (next section above). Patch is 164 bytes, and a `_Static_assert` guards the
-  256-byte slot.
+  256-byte slot. (v5: 212 bytes.)
 - **The sound destinations (v3):** ATTACK DECAY SUSTAIN RELEASE (live, through `pl_env()` in
   player.c, which cgb.c also reads through), NOTE LENGTH (at note-on), REVERB (added to the song
   header's), VIBRATO/TREMOLO/LFO SPEED (one global LFO in `player_frame()`, m4a's MODT scales).
   They are in PLAYER_SPEC §5.7's "added after delivery" table: the spec is still the contract.
+- **CHAOS (v5)**: per-note dice in `note_on()` from a private xorshift, reseeded from
+  `s_chaosSeed` at song start and on every counted loop, so it is a repeating pattern (measured:
+  loop-to-loop correlation 0.80 with chaos 120, against 0.25 with no chaos). FOUR draws per note
+  whatever happens, or the pattern drifts. REROLL CHAOS (EDGE) changes the seed. Dice and ranges
+  are in PLAYER_SPEC §5.7. Watch the tripwire: the interval pick was a `%` by a variable at first.
+- **RESTART LOOP / RESTART BAR (v5, EDGE):** `player_restart_loop()` sends each track to the loop
+  point `find_loop()` read ahead at `player_start()` (first backward GOTO; forward ones followed,
+  PATT stepped over; 0 if unsure, and then the song restarts). `player_restart_bar()` restores the
+  copy of `g_tracks` (plus ticks, tempo, chaos dice) taken every `g_plBarTicks` at the top of
+  `player_tick()`. Both release TIEd notes (gate 0 would hang without its EOT) and are followed by
+  `clock_reset()` in mod.c, as RESET is. The section length is `Patch.barLenIx` (v5, in what was
+  padding; older patches get one bar). The bar counter `s_barPos` is used instead of `g_plTicks %`
+  because `g_plBarTicks` is a variable (tripwire). The fuzz test fires both at random.
+- **Every value destination is BIP now** (2026-10-27): the one-sided ones got meanings below zero.
+  START → END (`sampleEnd`, a tail cut), LAYERS → from the bottom, SOLO → MUTE one track,
+  REVERSE → DROP (`dropChance`), CRUSH + rate only / − bits only (it used to be both on +),
+  VIBRATO → square (trill), TREMOLO → square (gate), CHAOS → FREE (`chaosFree`, never reseeded).
+  The factory MAIN → CHAOS is therefore free chaos left of noon. KIND_POS remains, unused.
+- **Switch UP = REPEAT BAR** (`SWU_REPEAT`, the factory setting since 2026-10-27; BYPASS before):
+  mod sets `g_plHoldBar` while up, and `player_tick()` restores the section's copy on every line
+  that ends it, so the section playing loops. Older patches keep their own SWITCH UP.
+- **SET > RESTARTS = AT BAR END** (`Patch.restartQ`, v5, padding before): RESET, RESTART LOOP and
+  RESTART BAR (and switch-down RESET) go to `player_queue_restart()`, and `player_tick()` does
+  them at the top of the first tick on the next section line (`s_barPos == 0`), with no
+  `clock_reset()`: it is already on the grid. A new song clears the queue. PLAY shows QUEUED.
+- **The factory map and buttons are a performance set** (2026-10-27, Andy asked for it): MAIN →
+  CHAOS, AU2 → RESTART BAR; A RESTART BAR, B REROLL, L/R hold REVERSE/CRUSH, UP/DOWN TRANSPOSE,
+  LEFT CLEAR, RIGHT step CHAOS. Layers, sample start and the voice-shift/table buttons left the
+  defaults. modtest now sets up the mappings each test uses instead of relying on the factory.
+- **Patch v5 moved BASE again, to `base[DEST_MAX = 48]` at the very end**: `cartTag` follows v3's
+  array at the host's fixed offset, so it could not grow in place. There is room up to 48
+  destinations now without another move (a `_Static_assert` says when not).
 - **CLEAR MANGLES** (EDGE) zeroes BASE and the BTN latches, except TEMPO, TRANSPOSE and FINE PITCH
   (the user asked to keep tempo and transpose; fine pitch counts as tuning, so it stays too).
   Latches drop on the next update (the BTN sum is taken before the edges), BASE at once.
@@ -216,7 +251,7 @@ an assistant.
 
 ## Payload facts
 
-- 58.3 KB, about 8.9 s to upload. IWRAM holds about 11 KB: the DMA handlers, the dispatcher,
+- 62.6 KB, about 9.5 s to upload. IWRAM holds about 11 KB: the DMA handlers, the dispatcher,
   `mixer_render`, the scan loop, the drawing primitives, `mod_update`, `clock_service`,
   `player_update`, the rings, the echo line and the accumulators.
 - **Drawing speed (2026-10-27, FM's `SPEEDUPSCREEN.md`):** `rect`/`line`/`glyph`/`text` are FM's

@@ -138,9 +138,10 @@ track(T1, [VOL, 110, VOICE, 3,
            N(24), 36, 120, W(24)], 4)
 header(0x4000, [T0, T1], VG)
 
-# song 1: key split + drums
+# song 1: key split + drums. Track 1's first note is an INTRO: the loop starts at the second
+# (offset 10), so RESTART LOOP has an intro to skip.
 T2, T3 = 0x5200, 0x5300
-track(T2, [VOL, 100, VOICE, 2, TEMPO, 70, N(12), 64, 90, W(12), N(12), 67, 90, W(12)], 6)
+track(T2, [VOL, 100, VOICE, 2, TEMPO, 70, N(12), 64, 90, W(12), N(12), 67, 90, W(12)], 10)
 track(T3, [VOL, 100, VOICE, 3, N(6), 36, 120, W(12)], 4)
 header(0x4040, [T2, T3], VG)
 

@@ -17,15 +17,14 @@
 //         effect, so an unpatched input or a centred knob never mangles anything
 //   BIP   both directions act around zero
 //
-// The factory map:
-//   PU2  -> CLOCK          AU1 -> RESET           AU2 -> SAMPLE START
+// The factory map (performance-first, 2026-10-27):
+//   PU2  -> CLOCK          AU1 -> RESET           AU2 -> RESTART BAR (beat-repeat from a divider)
 //   CV1  -> VOICE SHIFT    CV2 -> TRANSPOSE (1V/oct)
-//   MAIN -> LAYERS         X   -> TEMPO           Y   -> ROM SCRUB
-// (The sound destinations and CLEAR MANGLES are not in the factory map: assign them on MAP/BTN.)
+//   MAIN -> CHAOS          X   -> TEMPO           Y   -> ROM SCRUB
 // The factory buttons (PERFORM mode):
-//   A hold REVERSE   B hold CRUSH   L/R step VOICE SHIFT   UP/DOWN step TRANSPOSE
-//   LEFT/RIGHT step TABLE OFFSET
-// Switch: UP bypasses every mangle, DOWN (momentary) restarts the song.
+//   A RESTART BAR   B REROLL CHAOS   L hold REVERSE   R hold CRUSH   UP/DOWN step TRANSPOSE
+//   LEFT CLEAR MANGLES   RIGHT step CHAOS (+32 each press)
+// Switch: UP repeats the bar (the section playing loops), DOWN (momentary) restarts the song.
 #pragma once
 
 #include <stdint.h>
@@ -71,8 +70,17 @@ extern const char *src_name[SRC_COUNT];
 #define DEST_LFO     24    // BIP:  that LFO's speed, x1/4 .. x4 around m4a's default
 #define DEST_CLEAR   25    // EDGE: CLEAR MANGLES - every BASE value to 0 and every latch off,
                            //       except TEMPO, TRANSPOSE and FINE PITCH
-#define DEST_COUNT   26
+// ---- added 2026-10-27 (patch v5) ----
+#define DEST_CHAOS   26    // POS:  CHAOS - per-note dice: jumps, pans, swaps, reverse, starts,
+                           //       lengths, raw cart; a pattern that repeats each loop
+#define DEST_REROLL  27    // EDGE: a new CHAOS pattern
+#define DEST_RLOOP   28    // EDGE: RESTART LOOP - every track to its loop point (skips the intro)
+#define DEST_RBAR    29    // EDGE: RESTART BAR - back to the last section line (SET > RESTART BAR)
+#define DEST_COUNT   30
 #define DEST_COUNT_V2 16   // the destinations a v1/v2 patch knew
+#define DEST_COUNT_V3 26   // ... and a v3/v4 patch
+#define DEST_MAX     48    // room in Patch.base[] (v5): destinations can be added up to here
+                           // without moving anything again
 extern const char *dest_name[DEST_COUNT];
 extern const char *dest_short[DEST_COUNT];   // three letters, for the PERFORM legend
 int  dest_is_edge(int d);
@@ -106,7 +114,8 @@ typedef struct {
 #define SWU_NONE   0
 #define SWU_BYPASS 1       // UP: every mangle off
 #define SWU_PAUSE  2       // UP: transport paused (internal clock)
-#define SWU_COUNT  3
+#define SWU_REPEAT 3       // UP: REPEAT BAR - the section playing loops while the switch is up
+#define SWU_COUNT  4
 #define SWD_NONE   0
 #define SWD_RESET  1       // DOWN: restart the song
 #define SWD_NEXT   2       // DOWN: next song
@@ -116,6 +125,10 @@ extern const char *swd_name[SWD_COUNT];
 
 #define SCRUB_LEN_COUNT 7
 extern const uint32_t scrub_len[SCRUB_LEN_COUNT];
+#define BAR_LEN_COUNT 5
+#define BAR_LEN_DEFAULT 2          // one bar
+extern const uint16_t bar_len[BAR_LEN_COUNT];      // ticks: 1 beat, 2 beats, 1, 2, 4 bars
+extern const char *bar_len_name[BAR_LEN_COUNT];
 
 // ---- the patch (16 shared flash slots on the Workshop) ----
 // 'MP', not the FM card's 'FM' or 108's 'GB': a slot written by another GBA program is rejected
@@ -130,8 +143,11 @@ extern const uint32_t scrub_len[SCRUB_LEN_COUNT];
 //   v4  the cart the patch was saved on (tag + version + checksum, beside game[4]) and where its
 //       song tables are - APPENDED. At boot, a slot saved on the inserted cart is loaded and the
 //       scan skipped (main.c). A v3 slot arrives with these zeroed: no tag, no tables, no skip.
+//   v5  CHAOS and REROLL. BASE could not grow in place a second time - cartTag follows it, at an
+//       offset the host reads - so v3/v4's array is left as baseV3 and base[DEST_MAX] is APPENDED,
+//       with room for more. mod_patch_accept() copies baseV2 or baseV3 across.
 #define PATCH_MAGIC   0x4D50u
-#define PATCH_VERSION 4
+#define PATCH_VERSION 5
 #define PATCH_TABLES  8            // = SCAN_MAX_TABLES (mod.c asserts it)
 
 typedef struct {
@@ -147,7 +163,9 @@ typedef struct {
     uint8_t  scrubLenIx;       // index into scrub_len
     uint8_t  swUp, swDown;     // SWU_*, SWD_*
     uint8_t  cartSafe;         // 1 = 4/2 wait states
-    uint8_t  pad[3];
+    uint8_t  barLenIx;         // v5: RESTART BAR's section, index into bar_len (was padding)
+    uint8_t  restartQ;         // v5: 1 = restarts wait for the section line (was padding)
+    uint8_t  pad[1];
     // The scene: restored only on the same game (matching code).
     char     game[4];
     uint16_t song;             // playable-song index
@@ -158,7 +176,7 @@ typedef struct {
     int8_t   baseV2[DEST_COUNT_V2]; // v2's BASE values; migrated into base[] and unused since v3
     BtnSlot  btn[BTN_SLOTS];
     // ---- v3 ----
-    int8_t   base[DEST_COUNT]; // BASE values, in each destination's own units
+    int8_t   baseV3[DEST_COUNT_V3]; // v3/v4's BASE values; migrated into base[] and unused since v5
     // ---- v4 ---- the cart, and its music's whereabouts (written on every save)
     uint16_t cartTag;          // rom_cart_tag(); AT GBA_PATCH_TAG_OFFSET, the host announces it
     uint8_t  romVersion;       // header 0xBC
@@ -167,6 +185,8 @@ typedef struct {
     uint8_t  pad4[3];
     uint32_t tableAddr[PATCH_TABLES];
     uint16_t tableRate[PATCH_TABLES];
+    // ---- v5 ----
+    int8_t   base[DEST_MAX];   // BASE values, in each destination's own units (DEST_COUNT used)
 } Patch;
 
 extern Patch g_patch;

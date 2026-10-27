@@ -135,11 +135,49 @@ int main(int argc, char **argv)
     CHECK(g_tableCount == 2 && g_tables[0].gameRate == 13379 && g_tables[1].gameRate == 18157,
           "rates %u / %u, want 13379 / 18157", g_tables[0].gameRate, g_tables[1].gameRate);
 
-    // 3. Main knob full right strips layers down to track 1 (song 0 has 2 tracks).
+    // 2f. The factory map and buttons are the performance set (mod.h).
+    CHECK(g_patch.mod[SRC_MAIN].dest == DEST_CHAOS && g_patch.mod[SRC_AU2].dest == DEST_RBAR
+          && g_patch.mod[SRC_X].dest == DEST_TEMPO && g_patch.btn[0].dest == DEST_RBAR
+          && g_patch.btn[1].dest == DEST_REROLL && g_patch.btn[6].dest == DEST_CLEAR
+          && g_patch.btn[7].dest == DEST_CHAOS && g_patch.btn[4].dest == DEST_TRANS,
+          "factory: performance map and buttons");
+    g_knob[0] = 4095; update();
+    CHECK(g_mods.chaos >= 240, "MAIN full right: chaos %u, want ~250", g_mods.chaos);
+    g_knob[0] = 2048 + 100; update();
+    CHECK(g_mods.chaos == 0, "MAIN near noon: chaos %u, want 0 (detent)", g_mods.chaos);
+    neutral();
+
+    // The tests below set up the mappings they test, rather than lean on the factory ones.
+    g_patch.mod[SRC_MAIN].dest = DEST_LAYERS;
+    g_patch.btn[0].dest = DEST_REVERSE; g_patch.btn[0].amount = 63; g_patch.btn[0].mode = BTN_HOLD;
+    g_patch.btn[1].dest = DEST_CRUSH;   g_patch.btn[1].amount = 63; g_patch.btn[1].mode = BTN_HOLD;
+    g_patch.btn[3].dest = DEST_VSHIFT;  g_patch.btn[3].amount = 1;  g_patch.btn[3].mode = BTN_STEP;
+
+    // 3. Main knob (on LAYERS) full right strips layers down to track 1 (song 0 has 2 tracks).
     g_knob[0] = 4095; update();
     CHECK(g_mods.mute == 0x0002, "MAIN full: mute 0x%04X, want 0x0002", g_mods.mute);
     g_knob[0] = 0; update();
-    CHECK(g_mods.mute == 0, "MAIN full left (POS): mute 0x%04X, want 0", g_mods.mute);
+    CHECK(g_mods.mute == 0x0001, "MAIN full left: strips from the BOTTOM, mute 0x%04X, want 0x0001", g_mods.mute);
+    neutral();
+
+    // 3b. The other halves (2026-10-27): each one-sided mangle means something below zero too.
+    g_patch.base[DEST_START] = -64; g_patch.base[DEST_REVERSE] = -32; g_patch.base[DEST_CRUSH] = -15;
+    g_patch.base[DEST_VIBRATO] = -8; g_patch.base[DEST_TREMOLO] = -63; g_patch.base[DEST_CHAOS] = -40;
+    g_patch.base[DEST_SOLO] = -2;
+    update();
+    CHECK(g_mods.sampleStart == 0 && g_mods.sampleEnd == 128, "START -64: start %u end %u, want 0 128",
+          g_mods.sampleStart, g_mods.sampleEnd);
+    CHECK(g_mods.reverseChance == 0 && g_mods.dropChance == 64, "REVERSE -32: rev %u drop %u, want 0 64",
+          g_mods.reverseChance, g_mods.dropChance);
+    CHECK(g_crushHold == 1 && g_crushMask == 0x80, "CRUSH -15: hold %u mask 0x%02X, want 1 0x80 (one bit)",
+          g_crushHold, g_crushMask);
+    CHECK(g_mods.vibrato == -8 && g_mods.tremolo == -63, "TRILL/GATE: vib %d trm %d", g_mods.vibrato, g_mods.tremolo);
+    CHECK(g_mods.chaos == 80 && g_mods.chaosFree == 1, "CHAOS -40: amount %u free %u, want 80 1",
+          g_mods.chaos, g_mods.chaosFree);
+    CHECK(g_mods.mute == 0x0002, "SOLO -2 mutes track 2: mute 0x%04X", g_mods.mute);
+    g_patch.base[DEST_CRUSH] = 15; update();
+    CHECK(g_crushHold == 12 && g_crushMask == 0xFF, "CRUSH +15: hold %u mask 0x%02X, want 12 0xFF (rate only)",
+          g_crushHold, g_crushMask);
     neutral();
 
     // 4. Perform mode: A holds REVERSE, R steps VOICE SHIFT.
@@ -179,7 +217,7 @@ int main(int argc, char **argv)
     neutral();
     g_patch.base[DEST_TRANS] = 5;
     g_in[0] = 4095;
-    g_switch = 2; update();
+    g_patch.swUp = SWU_BYPASS; g_switch = 2; update();
     CHECK(g_mods.voiceShift == 0 && g_mods.pitch == 0, "bypass: vsh %d pitch %d", g_mods.voiceShift, g_mods.pitch);
     g_switch = 1; update();
     CHECK(g_mods.pitch == 5 * 256, "BASE transpose 5: pitch %d", g_mods.pitch);
@@ -198,7 +236,7 @@ int main(int argc, char **argv)
     CHECK(g_mods.release == 1024 && g_mods.vibrato == 10 && g_mods.reverb == -20 && g_mods.lfoSpeed == 22,
           "BASE release/vibrato/reverb: %d %u %d lfo %u", g_mods.release, g_mods.vibrato, g_mods.reverb,
           g_mods.lfoSpeed);
-    g_switch = 2; update();
+    g_patch.swUp = SWU_BYPASS; g_switch = 2; update();
     CHECK(g_mods.release == 0 && g_mods.vibrato == 0 && g_mods.reverb == 0, "bypass clears the sound hooks");
     g_switch = 1; update();
     {   // pl_env: release +full on a DS voice goes to 255, -full to 0; a PSG voice tops out at 7.
@@ -211,6 +249,15 @@ int main(int argc, char **argv)
         CHECK(up >= 254 && dn <= 1 && psg == 7 && att <= 2, "pl_env: rel %u/%u psg %u attack %u", up, dn, psg, att);
         update();
     }
+
+    // 8b2. CHAOS: BASE x2, CV /8, and bypass zeroes it.
+    neutral();
+    g_patch.base[DEST_CHAOS] = 50; update();
+    CHECK(g_mods.chaos == 100, "BASE chaos 50: %u, want 100", g_mods.chaos);
+    g_patch.swUp = SWU_BYPASS; g_switch = 2; update();
+    CHECK(g_mods.chaos == 0, "bypass clears chaos (%u)", g_mods.chaos);
+    g_switch = 1;
+    neutral();
 
     // 8c. CLEAR MANGLES (here on B): BASE values and latches go, TEMPO / TRANSPOSE / FINE PITCH stay.
     neutral();
@@ -231,20 +278,102 @@ int main(int argc, char **argv)
     mod_default_patch();
     neutral();
 
+    // 8d. Sections. RESTART LOOP on song 1 (a 12-tick intro, then a loop from the second note).
+    mod_default_patch();
+    neutral();
+    mod_song_select(1);
+    for (int i = 0; i < 30; i++) player_tick();
+    player_restart_loop();
+    CHECK(g_tracks[0].cmd == 0x08005200u + 10 && g_tracks[1].cmd == 0x08005300u + 4 && g_plTicks == 12,
+          "RESTART LOOP: cmd 0x%08X / 0x%08X ticks %u, want 0x0800520A / 0x08005304, 12",
+          g_tracks[0].cmd, g_tracks[1].cmd, g_plTicks);
+    mod_song_select(1);
+    for (int i = 0; i < 5; i++) player_tick();               // still in the intro
+    player_restart_loop();
+    CHECK(g_tracks[0].cmd == 0x08005200u + 10 && g_plTicks == 24,
+          "RESTART LOOP in the intro: cmd 0x%08X ticks %u (squared to the beat)", g_tracks[0].cmd, g_plTicks);
+
+    // RESTART BAR on song 0, one-bar sections: back to tick 96 with track 1 as it was there.
+    mod_song_select(0);
+    g_plBarTicks = 96;
+    for (int i = 0; i < 96; i++) player_tick();
+    uint32_t cmd96 = g_tracks[0].cmd;
+    uint8_t wait96 = g_tracks[0].wait;
+    for (int i = 0; i < 40; i++) player_tick();
+    player_restart_bar();
+    CHECK(g_plTicks == 96 && g_tracks[0].cmd == cmd96 && g_tracks[0].wait == wait96,
+          "RESTART BAR: ticks %u cmd 0x%08X wait %u, want 96 0x%08X %u", g_plTicks, g_tracks[0].cmd,
+          g_tracks[0].wait, cmd96, wait96);
+    {   // a TIEd note (gate 0) on the track is released by the jump
+        g_ds[0].status = SF_SUSTAIN; g_ds[0].track = 0; g_ds[0].gateTime = 0;
+        player_restart_bar();
+        CHECK(g_ds[0].status & SF_STOP, "RESTART BAR releases a tied note");
+        g_ds[0].status = 0; g_ds[0].track = PL_NONE;
+    }
+    // The destinations, from a button: B = RESTART BAR, then RESTART LOOP.
+    g_patch.btn[1].dest = DEST_RBAR;
+    g_perform = 1;
+    for (int i = 0; i < 20; i++) player_tick();
+    press(K_B);
+    CHECK(g_plTicks == 96 || g_plTicks == 97, "B = RESTART BAR: ticks %u, want 96 (97 once its tick has played)", g_plTicks);
+    g_patch.btn[1].dest = DEST_RLOOP;
+    press(K_B);
+    CHECK(g_tracks[0].cmd == 0x08005000u + 6 || g_plTicks <= 1, "B = RESTART LOOP: cmd 0x%08X", g_tracks[0].cmd);
+    mod_default_patch();
+    neutral();
+    mod_song_select(0);
+
+    // 8e. RESTARTS = AT BAR END: a RESTART BAR waits for the section line, then lands on it.
+    mod_default_patch();
+    neutral();
+    mod_song_select(0);
+    g_patch.restartQ = 1;
+    g_patch.btn[0].dest = DEST_RBAR;
+    mod_patch_applied();                                   // one-bar sections
+    g_perform = 1;
+    for (int i = 0; i < 100; i++) player_tick();           // 4 ticks into bar 2
+    press(K_A);
+    CHECK(g_plQueued == PL_RESTART_BAR && g_plTicks == 100, "AT BAR END: queued %u, ticks %u (nothing yet)",
+          g_plQueued, g_plTicks);
+    for (int i = 0; i < 92; i++) player_tick();            // ticks 100..191 played: the bar's last
+    CHECK(g_plQueued == PL_RESTART_BAR, "still queued at the bar's last tick (%u)", g_plQueued);
+    player_tick();                                         // the line: jump back to 96, play it
+    CHECK(g_plQueued == 0 && g_plTicks == 97, "on the line: queued %u ticks %u, want 0 97", g_plQueued, g_plTicks);
+    g_patch.restartQ = 0;
+    mod_default_patch();
+    neutral();
+    mod_song_select(0);
+
+    // 8f. Switch UP = REPEAT BAR (the factory setting): the bar playing loops while it is up.
+    mod_default_patch();
+    neutral();
+    mod_song_select(0);
+    mod_patch_applied();
+    CHECK(g_patch.swUp == SWU_REPEAT, "factory switch up: %u, want REPEAT BAR", g_patch.swUp);
+    for (int i = 0; i < 100; i++) player_tick();            // into bar 2 (ticks 96..191)
+    g_switch = 2; update();
+    for (int i = 0; i < 200; i++) player_tick();
+    CHECK(g_plHoldBar && g_plTicks >= 96 && g_plTicks < 192, "switch up 200 ticks: ticks %u, want inside 96..191",
+          g_plTicks);
+    g_switch = 1; update();
+    for (int i = 0; i < 200; i++) player_tick();
+    CHECK(!g_plHoldBar && g_plTicks >= 300, "switch back: ticks %u, want it moving on", g_plTicks);
+    neutral();
+
     // 9. A v1 patch is migrated: version 2, factory buttons, zero BASE.
     Patch p;
     mod_default_patch();
     memcpy(&p, &g_patch, sizeof p);
     memset(&p.table, 0, sizeof p - offsetof(Patch, table));
     p.version = 1;
-    CHECK(mod_patch_accept(&p) == 1 && p.version == 4, "v1 patch accepted and migrated (version %u)", p.version);
-    CHECK(p.btn[0].dest == DEST_REVERSE && p.btn[3].dest == DEST_VSHIFT, "v1 migration: factory buttons");
+    CHECK(mod_patch_accept(&p) == 1 && p.version == 5, "v1 patch accepted and migrated (version %u)", p.version);
+    CHECK(p.btn[0].dest == DEST_RBAR && p.btn[7].dest == DEST_CHAOS, "v1 migration: factory buttons");
     // A v2 patch: BASE in the old place, nothing after the buttons. It must land in base[].
     mod_default_patch();
     memcpy(&p, &g_patch, sizeof p);
     memset(p.base, 0, sizeof p.base);
     p.version = 2; p.baseV2[DEST_VSHIFT] = 9; p.baseV2[DEST_TRANS] = -3;
-    CHECK(mod_patch_accept(&p) == 1 && p.version == 4 && p.base[DEST_VSHIFT] == 9 && p.base[DEST_TRANS] == -3
+    CHECK(mod_patch_accept(&p) == 1 && p.version == 5 && p.base[DEST_VSHIFT] == 9 && p.base[DEST_TRANS] == -3
           && p.base[DEST_RELEASE] == 0, "v2 patch migrated: vsh %d trn %d", p.base[DEST_VSHIFT], p.base[DEST_TRANS]);
     // 10. Patch v4: a save records the cart and its tables; boot can install them without a scan.
     mod_default_patch();
@@ -274,7 +403,7 @@ int main(int argc, char **argv)
     memcpy(&p, &g_patch, sizeof p);
     memset(&p.cartTag, 0, sizeof p - offsetof(Patch, cartTag));
     p.version = 3;
-    CHECK(mod_patch_accept(&p) == 1 && p.version == 4 && p.tableCount == 0 && !mod_patch_is_this_cart(&p),
+    CHECK(mod_patch_accept(&p) == 1 && p.version == 5 && p.tableCount == 0 && !mod_patch_is_this_cart(&p),
           "v3 patch migrated with no cart (version %u)", p.version);
     CHECK(offsetof(Patch, cartTag) == GBA_PATCH_TAG_OFFSET, "cartTag at the host's offset");
 

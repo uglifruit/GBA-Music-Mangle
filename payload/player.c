@@ -7,7 +7,7 @@
 #include "cgb.h"
 #include "gba.h"
 
-PlayerMods g_mods = { 0, 0, 0, 0, 0, 4096, 0, 0, 0x100, 0, 0, 0, 0, 0, 0, 0, 0, 22 };
+PlayerMods g_mods = { 0, 0, 0, 0, 0, 4096, 0, 0, 0x100, 0, 0, 0, 0, 0, 0, 0, 0, 22, 0, 0, 0, 0 };
 Track g_tracks[PL_TRACKS];
 Chan g_ds[PL_DS_MAX], g_cgb[PL_CGB];
 uint32_t g_plHeader, g_plTicks;
@@ -16,6 +16,9 @@ uint16_t g_plTempoD = 150;
 uint8_t g_plMaxChans = 8;
 uint16_t g_plGameRate = 13379;
 uint8_t g_plRepeat = 1;
+uint16_t g_plBarTicks = 96;
+uint8_t g_plQueued;
+uint8_t g_plHoldBar;
 
 static uint32_t s_entry, s_tone, s_rng = 0x6D2B79F5u;
 static uint8_t s_priority;
@@ -29,12 +32,31 @@ static uint8_t s_songReverb;
 static uint8_t s_lfoPhase;
 static int16_t s_lfoPitch;               // 1/256 semitone, added like m4a's MODT 0
 static int16_t s_lfoVol;                 // volume x (128 + v) / 128, like m4a's MODT 1
+// CHAOS dice: their own xorshift, restarted from s_chaosSeed at the song start and on every loop.
+static uint32_t s_chaosSeed = 0x9E3779B9u, s_chaosRng = 0x9E3779B9u;
+// Sections: each track's loop point, the tick the leader first reached its own, and the copy of
+// the tracks taken at the last section line (s_barPos counts ticks since it).
+#define TICK_UNKNOWN 0xFFFFFFFFu
+static uint32_t s_loopAddr[PL_TRACKS];
+static uint32_t s_loopTick = TICK_UNKNOWN;
+static Track    s_snap[PL_TRACKS];
+static uint32_t s_snapTicks, s_snapChaos;
+static uint16_t s_snapTempo;
+static uint8_t  s_snapValid;
+static uint16_t s_barPos;
 
 // Volatile byte stores prevent GCC synthesizing libc calls in freestanding builds.
 static void clear_bytes(void *dst, unsigned size)
 {
     volatile uint8_t *p = (volatile uint8_t *)dst;
     for (unsigned i = 0; i < size; ++i) p[i] = 0;
+}
+
+static void copy_bytes(void *dst, const void *src, unsigned size)
+{
+    volatile uint8_t *d = (volatile uint8_t *)dst;
+    const volatile uint8_t *s = (const volatile uint8_t *)src;
+    for (unsigned i = 0; i < size; ++i) d[i] = s[i];
 }
 
 static inline __attribute__((always_inline)) int clamp(int v, int lo, int hi)
@@ -83,6 +105,77 @@ static unsigned gate_len(unsigned g)
     if (v > 0) g += (g * 3u * (unsigned)v) >> 11;
     else       g -= (g * 3u * (unsigned)-v) >> 13;
     return g < 1 ? 1 : g > 255 ? 255 : g;
+}
+
+static uint32_t chaos_roll(void)
+{
+    uint32_t x = s_chaosRng;
+    x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+    return s_chaosRng = x;
+}
+
+void player_chaos_reroll(void)
+{
+    s_chaosSeed = s_chaosSeed * 1664525u + 1013904223u;
+    if (!s_chaosSeed) s_chaosSeed = 1;
+    s_chaosRng = s_chaosSeed;
+}
+
+// Release a track's TIEd notes (gate 0, held until an EOT that a jump may skip) and drop its gate.
+static void release_ties(int n)
+{
+    for (int i = 0; i < PL_DS_MAX + PL_CGB; ++i) {
+        Chan *c = i < PL_DS_MAX ? &g_ds[i] : &g_cgb[i - PL_DS_MAX];
+        if (c->track == n && (c->status & SF_ON) && !c->gateTime) c->status |= SF_STOP;
+    }
+    g_tracks[n].gate = 0;
+}
+
+void player_restart_loop(void)
+{
+    if (!g_plHeader) return;
+    int any = 0;
+    for (int n = 0; n < PL_TRACKS; ++n)
+        if ((g_tracks[n].flags & MPT_FLG_EXIST) && s_loopAddr[n]) any = 1;
+    if (!any) { player_start(s_entry); return; }
+    for (int n = 0; n < PL_TRACKS; ++n) {
+        Track *t = &g_tracks[n];
+        if (!(t->flags & MPT_FLG_EXIST) || !s_loopAddr[n]) continue;
+        release_ties(n);
+        // As the track's own GOTO would: the state it has now carries on, only the place moves.
+        t->cmd = s_loopAddr[n];
+        t->wait = 0;
+        t->patternLevel = 0;
+        t->repN = 0;
+    }
+    // The tick count goes back to the loop's start if the leader has been there; before then
+    // (still in the intro) it can only be squared to the beat.
+    g_plTicks = s_loopTick != TICK_UNKNOWN ? s_loopTick : ((g_plTicks + 23u) / 24u) * 24u;
+    ++g_plLoops;
+    if (!g_mods.chaosFree) s_chaosRng = s_chaosSeed;
+    s_snapValid = 0;
+    s_barPos    = 0;
+}
+
+void player_queue_restart(uint8_t what) { if (g_plHeader) g_plQueued = what; }
+
+void player_restart_bar(void)
+{
+    if (!g_plHeader || !s_snapValid) return;
+    for (int n = 0; n < PL_TRACKS; ++n) {
+        release_ties(n);
+        Track *t = &g_tracks[n];
+        // The follower's own counters are not the song's state: keep them running.
+        uint32_t notes = t->notes;
+        uint8_t act = t->act, lastKey = t->lastKey;
+        copy_bytes(t, &s_snap[n], sizeof(Track));
+        t->notes = notes; t->act = act; t->lastKey = lastKey; t->gate = 0;
+        if (t->flags & MPT_FLG_EXIST) t->flags |= MPT_FLG_VOLCHG | MPT_FLG_PITCHG;
+    }
+    g_plTicks  = s_snapTicks;
+    g_plTempoD = s_snapTempo;
+    if (!g_mods.chaosFree) s_chaosRng = s_snapChaos;
+    s_barPos   = 0;
 }
 
 static unsigned channel_cap(void)
@@ -264,9 +357,14 @@ static void lfo_frame(void)
     if (g_mods.vibrato || g_mods.tremolo) {
         s_lfoPhase = (uint8_t)(s_lfoPhase + g_mods.lfoSpeed);
         int tri = s_lfoPhase < 128 ? (int)s_lfoPhase - 64 : 191 - (int)s_lfoPhase;
-        int wave = tri * 2;
-        pv = 16 * ((wave * (g_mods.vibrato > 63 ? 63 : g_mods.vibrato)) >> 6);
-        vv = (wave * (g_mods.tremolo > 63 ? 63 : g_mods.tremolo)) >> 6;
+        int wave = tri * 2;                               // a triangle, for + depths
+        int sq = s_lfoPhase < 128 ? 126 : -126;           // a square, for - depths: trill / gate
+        int v = g_mods.vibrato, m = g_mods.tremolo;
+        int vd = v < 0 ? -v : v, md = m < 0 ? -m : m;
+        if (vd > 63) vd = 63;
+        if (md > 63) md = 63;
+        pv = 16 * (((v < 0 ? sq : wave) * vd) >> 6);
+        vv = ((m < 0 ? sq : wave) * md) >> 6;
     }
     unsigned flags = (pv != s_lfoPitch ? MPT_FLG_PITCHG : 0) | (vv != s_lfoVol ? MPT_FLG_VOLCHG : 0);
     if (!flags) return;
@@ -309,6 +407,59 @@ void player_init(void)
     s_pitch = g_mods.pitch; s_mute = g_mods.mute;
 }
 
+// A track's loop point: the target of its first backward GOTO, read ahead in address order from
+// its start with the command lengths command() consumes. Forward GOTOs are followed, PATTs are
+// stepped over (a loop is never inside a pattern), and anything this walk cannot be sure of ends
+// it with 0 - which only means RESTART LOOP restarts the song instead.
+static uint32_t find_loop(uint32_t a)
+{
+    unsigned last = 0;
+    for (int n = 0; n < 4096; n++) {
+        if (!rom_ok(a, 8)) return 0;
+        unsigned c = rom_u8(a);
+        if (c < 128) {
+            if (last < CMD_VOICE) return 0;
+            c = last;                                     // running status: this byte is an arg
+        } else {
+            ++a;
+            if (c >= CMD_VOICE) last = c;
+        }
+        if (c >= CMD_TIE) {                               // note: key, velocity, gate extension
+            for (int k = 0; k < 3 && rom_u8(a) < 128; k++) ++a;
+            continue;
+        }
+        if (c <= 0xB0) continue;                          // a wait
+        switch (c) {
+        case CMD_GOTO: {
+            uint32_t d = rom_u32(a);
+            if (d < a) return rom_ok(d, 1) ? d : 0;       // backward: the loop
+            a = d;                                        // forward: follow it
+            break;
+        }
+        case CMD_PATT:   a += 4; break;
+        case CMD_PEND:   break;
+        case CMD_REPT:   a += 5; break;
+        case CMD_MEMACC: { unsigned op = rom_u8(a); a += 3; if (op >= 6 && op <= 17) a += 4; break; }
+        case CMD_PORT:   a += 2; break;
+        case CMD_EOT:    if (rom_u8(a) < 128) ++a; break;
+        case CMD_XCMD: {
+            unsigned sub = rom_u8(a++);
+            if (sub == 0 || sub == 3 || sub > 13) return 0;
+            a += (sub == 1 || sub == 13) ? 4 : (sub == 12) ? 2 : 1;
+            break;
+        }
+        case CMD_PRIO: case CMD_TEMPO: case CMD_KEYSH: case CMD_VOICE: case CMD_VOL: case CMD_PAN:
+        case CMD_BEND: case CMD_BENDR: case CMD_LFOS: case CMD_LFODL: case CMD_MOD: case CMD_MODT:
+        case CMD_TUNE:
+            ++a;
+            break;
+        default:
+            return 0;                                     // FINE, or a byte that is no command
+        }
+    }
+    return 0;
+}
+
 int player_start(uint32_t songEntry)
 {
     int tc;
@@ -317,11 +468,18 @@ int player_start(uint32_t songEntry)
     if (!scan_header_ok(hdr, &tc) || tc < 1 || tc > PL_TRACKS) return 0;
     player_stop();
     clear_bytes(g_tracks, sizeof(g_tracks));
+    for (int n = 0; n < PL_TRACKS; ++n) s_loopAddr[n] = 0;
     for (int n = 0; n < tc; ++n) {
         g_tracks[n].flags = MPT_FLG_EXIST | MPT_FLG_START;
         g_tracks[n].cmd = rom_u32(SH_PART(hdr, n));
+        s_loopAddr[n] = find_loop(g_tracks[n].cmd);
     }
+    s_loopTick  = TICK_UNKNOWN;
+    s_snapValid = 0;
+    s_barPos    = 0;
+    g_plQueued  = 0;
     s_entry = songEntry;
+    if (!g_mods.chaosFree) s_chaosRng = s_chaosSeed;
     s_tone = rom_u32(SH_TONE(hdr)); s_priority = rom_u8(SH_PRIORITY(hdr));
     g_plTempoD = 150; g_plTicks = 0;
     unsigned reverb = rom_u8(SH_REVERB(hdr));
@@ -403,6 +561,27 @@ static int sample_resolve(Chan *c, unsigned type, uint32_t wav)
     return 1;
 }
 
+// CHAOS on a resolved DirectSound sample: reverse, a random start, and above chaos 128 a stretch of
+// raw cart (code, graphics, anything) in place of the sample. Every address stays inside the cart.
+static void chaos_sample(Chan *r, unsigned ch, uint32_t r2, uint32_t r3)
+{
+    if ((r2 & 0xFF) < (ch >> 1)) r->sFlags ^= MIX_F_REVERSE;
+    if (((r2 >> 8) & 0xFF) < (ch >> 1) && r->sSize > 64) {
+        uint32_t skip = (r->sSize * ((r2 >> 16) & 0xFF)) >> 9;   // up to half the sample
+        r->sData += skip;
+        r->sSize -= skip;
+        if (r->sLoop != MIX_NOLOOP) r->sLoop = r->sLoop > skip ? r->sLoop - skip : 0;
+    }
+    if (ch > 128 && (r3 & 0xFF) < ((ch - 128) << 1) && g_romSize > 0x10000u) {
+        uint32_t size = 1024u << ((r2 >> 24) & 3);              // 1..8 KB of whatever is there
+        uint32_t off = ((r2 ^ (r3 << 7)) & (g_romSize - 1)) & ~3u;
+        if (off > g_romSize - size - 2) off = g_romSize - size - 2;
+        r->sData = ROM_BASE + off;
+        r->sSize = size;
+        r->sLoop = 0;
+    }
+}
+
 // ply_note (m4a_1.s). All follower updates precede fallible voice/sample resolution.
 static void note_on(int n, unsigned cmd)
 {
@@ -416,10 +595,29 @@ static void note_on(int n, unsigned cmd)
         }
     }
     ++t->notes; t->lastKey = clamp(t->key + t->keyShift, 0, 127);
+    // CHAOS: four draws per note whatever happens, so the dice stay in step and the pattern
+    // repeats exactly each loop. Each byte is one die; a die "hits" below a threshold from chaos.
+    unsigned ch = g_mods.chaos;
+    uint32_t r1 = 0, r2 = 0, r3 = 0, r4 = 0;
+    if (ch) { r1 = chaos_roll(); r2 = chaos_roll(); r3 = chaos_roll(); r4 = chaos_roll(); }
     unsigned gate = gate_len(t->gateTime);
+    if (ch && gate && (r4 & 0xFF) < (ch >> 1)) {
+        // Stretched or chopped: x1/4, x1/2, x2 or x4.
+        unsigned q = (r4 >> 8) & 3u;
+        gate = q == 0 ? gate >> 2 : q == 1 ? gate >> 1 : q == 2 ? gate << 1 : gate << 2;
+        gate = gate < 1 ? 1 : gate > 255 ? 255 : gate;
+    }
     t->act = t->velocity; t->gate = 1; t->gateLeft = gate;
+    // DROP (REVERSE's negative side): the note happens for the follower and the UI, but is not heard.
+    // The dice above are already drawn, so CHAOS stays in step either way.
+    if (g_mods.dropChance) {
+        s_rng ^= s_rng << 13; s_rng ^= s_rng >> 17; s_rng ^= s_rng << 5;
+        if ((uint8_t)s_rng < g_mods.dropChance) return;
+    }
     uint8_t tone[TONE_SIZE];
-    if (g_mods.voiceShift || g_mods.tableOffset) {
+    if (ch && (r1 & 0xFF) < (ch >> 1) && read_tone(tone, s_tone + 12u * ((r1 >> 8) & 127))) {
+        // an instrument from anywhere in the song's table
+    } else if (g_mods.voiceShift || g_mods.tableOffset) {
         uint32_t addr = s_tone + (int32_t)g_mods.tableOffset +
                         12u * ((t->voice + g_mods.voiceShift) & 127);
         if (!read_tone(tone, addr)) return;
@@ -441,6 +639,14 @@ static void note_on(int n, unsigned cmd)
             if (tone[3] & 128) pan = (tone[3] - TONEDATA_P_S_PAN) * 2;
         }
     }
+    if (ch && ((r1 >> 16) & 0xFF) < ch) {
+        // Interval jumps, wider with more chaos: fifths and fourths first, then octaves.
+        static const int8_t jump[8] = { 7, -5, 12, -12, 5, -7, 24, -24 };
+        unsigned n = 2u + (ch >> 6) * 2u;                       // 2 .. 8 of the table
+        int k = (int)key + jump[((r1 >> 24) * n) >> 8];          // 0..n-1, no divide (-nostdlib)
+        key = (unsigned)(k < 0 ? 0 : k > 127 ? 127 : k);
+    }
+    if (ch && (r3 >> 24) < ch) pan = (int)((r3 >> 16) & 0x7F) - 64;   // anywhere, hard
     unsigned type = tone[0], kind = type & TONEDATA_TYPE_CGB;
     uint32_t wav = tone_word(tone + 4);
     if (kind > PL_CGB || (type & TONEDATA_TYPE_CMP)) return;
@@ -453,6 +659,15 @@ static void note_on(int n, unsigned cmd)
     Chan resolved;
     if (!kind) {
         if (!sample_resolve(&resolved, type, wav)) return;
+        if (ch) chaos_sample(&resolved, ch, r2, r3);
+        if (g_mods.sampleEnd) {
+            // END (SAMPLE START's negative side): cut the sample's tail off. A loop that starts
+            // inside what is left loops a shorter span; one that started in the cut part goes.
+            uint32_t keep = resolved.sSize - ((resolved.sSize * g_mods.sampleEnd) >> 8);
+            if (keep < 16) keep = resolved.sSize < 16 ? resolved.sSize : 16;
+            resolved.sSize = keep;
+            if (resolved.sLoop != MIX_NOLOOP && resolved.sLoop >= keep) resolved.sLoop = MIX_NOLOOP;
+        }
         i = allocate_ds(priority, n);
         if (i < 0) return;
         c = &g_ds[i];
@@ -570,7 +785,7 @@ static void xcmd(int n, uint32_t command_addr)
 static void jump_track(Track *t, uint32_t from, int count_loop)
 {
     uint32_t dest = rom_u32(t->cmd);
-    if (count_loop && dest <= from) ++g_plLoops;
+    if (count_loop && dest <= from) { ++g_plLoops; if (!g_mods.chaosFree) s_chaosRng = s_chaosSeed; }
     t->cmd = dest;
 }
 
@@ -643,6 +858,17 @@ static void lfo_step(Track *t)
 void player_tick(void)
 {
     if (!g_plHeader) return;
+    // A restart queued for the section line (AT BAR END): this tick is on the line.
+    if (g_plQueued && s_barPos == 0) {
+        uint8_t q = g_plQueued;
+        g_plQueued = 0;
+        if (q == PL_RESTART_SONG)      player_start(s_entry);
+        else if (q == PL_RESTART_LOOP) player_restart_loop();
+        else                           player_restart_bar();
+    }
+    // REPEAT BAR: on the line that ends the section, back to its start (and not on the line it
+    // was taken at, which is where we already are).
+    if (g_plHoldBar && s_barPos == 0 && s_snapValid && g_plTicks != s_snapTicks) player_restart_bar();
     int leader = -1;
     for (int n = 0; n < PL_TRACKS; ++n) if (g_tracks[n].flags & MPT_FLG_EXIST) { leader = n; break; }
     if (leader < 0) {
@@ -651,6 +877,13 @@ void player_tick(void)
         ++g_plLoops; leader = 0;
     }
     if (g_plTicks % 24 == 0) ++g_plBeats;
+    // A section line: keep a copy of the song's state as it stands before this tick.
+    if (s_barPos == 0) {
+        copy_bytes(s_snap, g_tracks, sizeof(g_tracks));
+        s_snapTicks = g_plTicks; s_snapTempo = g_plTempoD; s_snapChaos = s_chaosRng;
+        s_snapValid = 1;
+    }
+    if (++s_barPos >= g_plBarTicks) s_barPos = 0;
     for (int i = 0; i < PL_DS_MAX + PL_CGB; ++i) {
         Chan *c = i < PL_DS_MAX ? &g_ds[i] : &g_cgb[i - PL_DS_MAX];
         if ((c->status & SF_ON) && c->track < PL_TRACKS && c->gateTime && --c->gateTime == 0)
@@ -675,6 +908,7 @@ void player_tick(void)
         while (!t->wait && (t->flags & MPT_FLG_EXIST)) {
             if (!budget-- || !rom_ok(t->cmd, 8)) { track_stop(n); break; }
             uint32_t from = t->cmd;
+            if (n == leader && from == s_loopAddr[n] && s_loopTick == TICK_UNKNOWN) s_loopTick = g_plTicks;
             unsigned cmd = rom_u8(t->cmd);
             if (cmd < 128) {
                 cmd = t->runningStatus;

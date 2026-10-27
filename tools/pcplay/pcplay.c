@@ -12,7 +12,8 @@
 //              [--voice-shift N] [--table BYTES] [--start 0..255] [--scrub BYTES]
 //              [--reverse 0..255] [--transpose SEMIS] [--tempo PCT]
 //              [--attack|--decay|--sustain|--release|--length -2047..2047] [--reverb -127..127]
-//              [--vibrato 0..63] [--tremolo 0..63] [--lfo 1..255]
+//              [--vibrato -63..63] [--tremolo -63..63] [--lfo 1..255] [--chaos 0..255]
+//              [--end 0..255] [--drop 0..255]
 //   pcplay ROM --fuzz N        every song, N seconds each, random mangles every 250 ms
 //   --songtable T (1-based) and --list 0/1/2 (all/music/sfx) pick the song list first, as the SET page does
 //   (default: table 1, MUSIC if it has any music, else ALL)
@@ -107,9 +108,16 @@ static void render(Render *r, uint32_t blocks, int fuzz)
             g_mods.release       = (int16_t)((int)(rnd() % 4095) - 2047);
             g_mods.gate          = (int16_t)((int)(rnd() % 4095) - 2047);
             g_mods.reverb        = (int8_t)((int)(rnd() % 255) - 127);
-            g_mods.vibrato       = (uint8_t)(rnd() % 64);
-            g_mods.tremolo       = (uint8_t)(rnd() % 64);
+            g_mods.vibrato       = (int8_t)((int)(rnd() % 127) - 63);
+            g_mods.tremolo       = (int8_t)((int)(rnd() % 127) - 63);
+            g_mods.sampleEnd     = (uint8_t)((rnd() & 1) ? rnd() : 0);
+            g_mods.dropChance    = (uint8_t)((rnd() & 1) ? rnd() : 0);
+            g_mods.chaosFree     = (uint8_t)(rnd() & 1);
             g_mods.lfoSpeed      = (uint8_t)(1 + rnd() % 255);
+            g_mods.chaos         = (uint8_t)((rnd() & 1) ? rnd() : 0);
+            g_plBarTicks         = (uint16_t)(24u << (rnd() % 5u));
+            if (rnd() % 3u == 0) player_restart_bar();
+            else if (rnd() % 5u == 0) player_restart_loop();
         }
         tickAcc += AUDIO_BLOCK * player_tempo_i() * 408u;
         for (int n = 0; tickAcc >= TICK_ONE && n < 8; n++) { tickAcc -= TICK_ONE; player_tick(); }
@@ -230,9 +238,12 @@ int main(int argc, char **argv)
     g_mods.release       = (int16_t)argl(argc, argv, "--release", 0);
     g_mods.gate          = (int16_t)argl(argc, argv, "--length", 0);
     g_mods.reverb        = (int8_t)argl(argc, argv, "--reverb", 0);
-    g_mods.vibrato       = (uint8_t)argl(argc, argv, "--vibrato", 0);
-    g_mods.tremolo       = (uint8_t)argl(argc, argv, "--tremolo", 0);
+    g_mods.vibrato       = (int8_t)argl(argc, argv, "--vibrato", 0);
+    g_mods.tremolo       = (int8_t)argl(argc, argv, "--tremolo", 0);
+    g_mods.sampleEnd     = (uint8_t)argl(argc, argv, "--end", 0);
+    g_mods.dropChance    = (uint8_t)argl(argc, argv, "--drop", 0);
     g_mods.lfoSpeed      = (uint8_t)argl(argc, argv, "--lfo", 22);
+    g_mods.chaos         = (uint8_t)argl(argc, argv, "--chaos", 0);
 
     double secs = (double)argl(argc, argv, "--secs", 10);
     Render r = { 0 };

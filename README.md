@@ -1,4 +1,4 @@
-# GBA Cart Player
+# GBA Music Mangle
 
 A card for the Music Thing Modular **Workshop Computer**. It boots a Game Boy Advance over the link
 cable while a game cartridge stays inserted. The GBA finds the game's own music, and plays it so your
@@ -67,11 +67,12 @@ You don't need anything patched to mangle a song:
 
   | Button | Does |
   |---|---|
-  | A | Reverse (held) |
-  | B | Crush (held) |
-  | L / R | Voice shift down / up |
-  | Up / Down | Transpose up / down |
-  | Left / Right | Nudge the table offset |
+  | A | Restart the bar (tap it for a stutter) |
+  | B | Reroll the chaos pattern |
+  | L / R | Reverse / crush, while held |
+  | Up / Down | Transpose up / down a semitone |
+  | Left | Clear the mangles (tempo and pitch stay) |
+  | Right | More chaos (each press adds some; Left clears it) |
 
   Each button can **HOLD** a mangle while pressed, **LATCH** it on and off, or **STEP** its base
   value. It can also fire a clock, a reset, the next song, or **CLEAR MANGLES**.
@@ -99,6 +100,58 @@ These reach into the engine's own controls, on every voice (samples and Game Boy
 | TREMOLO | Wobbles the volume of every track. |
 | LFO SPEED | The vibrato and tremolo rate, ×¼ to ×4 around the engine's usual 5 Hz. |
 
+### Both sides of noon
+
+Every mangle does something in both directions, from a knob either side of noon or a CV either side
+of 0 V. These ones have a different effect on each side:
+
+| Destination | Right of noon / positive | Left of noon / negative |
+|---|---|---|
+| START / END | Start later into each sample | Cut each sample's end off (a chop) |
+| LAYERS | Strip tracks from the top | Strip tracks from the bottom |
+| SOLO / MUTE | Solo one track, picked by the level | Mute one track, picked by the level |
+| REVERSE/DROP | Chance a note plays backwards | Chance a note is dropped (thins it out) |
+| CRUSH | Lower sample rate (gritty, aliased) | Fewer bits (noisy, down to one) |
+| VIBRATO/TRILL | Smooth pitch wobble | Square wobble: a trill |
+| TREMOLO/GATE | Smooth volume wobble | Square wobble: a rhythmic gate |
+| CHAOS | A pattern that repeats every loop | Free chaos: new dice every time |
+
+The factory main knob is CHAOS, so left of noon is free chaos and right is the repeating kind.
+
+### Restarting: song, loop, bar
+
+Three actions jump back, each one assignable to a button (BTN), a CV or gate (MAP), or both:
+
+| Action | Jumps to |
+|---|---|
+| RESET | The start of the song. |
+| RESTART LOOP | The song's loop point: most game music is an intro and then a looping body, and this skips the intro. A song that doesn't loop restarts instead. |
+| RESTART BAR | The start of the current section. SET > RESTART BAR sets the section: 1 beat, 2 beats, 1 bar, 2 bars or 4 bars. |
+
+**SET > RESTARTS** chooses when they happen: **NOW**, or **AT BAR END**, which holds them until the
+next section line so they always land on the grid (the PLAY page shows QUEUED while one waits).
+Pushing the switch down counts as a RESET too.
+
+RESTART BAR fed from a clock divider (or tapped on a button) is a **beat-repeat**: the same bar
+again and again while the triggers keep coming, and the song carries on when they stop. Notes
+already sounding ring on through each jump, and CHAOS rewinds with it, so a repeated bar keeps its
+chaos. With an external clock, all three line up with the clock pulse they arrive with.
+
+### CHAOS
+
+**CHAOS** rolls dice on every note. The higher it goes, the more often each thing happens and the
+further it goes:
+
+- **Any amount:** notes jump by fifths and octaves, and pan hard left or right.
+- **More:** instruments are swapped for random ones from the game's set; samples play backwards
+  or start partway in; notes are stretched or chopped.
+- **Past halfway:** some notes play raw cart data (the game's code and graphics) as sound.
+
+The dice restart every time the song loops, so chaos is a **pattern that repeats**, not noise: the
+same note gets the same treatment each time round. **REROLL CHAOS** deals a new pattern. Try CHAOS on
+the main knob or a CV, and REROLL on a button, then reroll until a pattern grabs you. CLEAR MANGLES
+stops it, and so does the switch when SET > SWITCH UP is BYPASS.
+
 The envelope changes act on notes already sounding, so holding a button (say B on RELEASE, HOLD,
 amount 40) stretches the tails of whatever is playing. None of these are in the factory map;
 assign them on MAP and BTN.
@@ -121,13 +174,13 @@ behave as hits:
 |---|---|
 | Pulse In 2 | **Clock.** Set the PPQN on the SET page (1, 2, 4, 8, 12, 24). With no clock patched, songs play at their own tempo. |
 | Audio In 1 | **Reset:** restart the song, in step with the clock |
-| Audio In 2 | **Sample start:** start every sample further in |
+| Audio In 2 | **Restart bar:** from a clock divider, a beat-repeat |
 | CV In 1 | **Voice shift:** every instrument swapped for one further along the game's instrument table |
 | CV In 2 | **Transpose,** 1 V/octave, in semitones |
-| Main knob | **Layers:** turning it up strips tracks away from the top down |
+| Main knob | **Chaos:** right of noon a pattern that repeats each loop, left of noon free chaos |
 | Knob X | **Tempo** (when not externally clocked), ×0.25 to ×4. Around noon is the song's own tempo. |
 | Knob Y | **ROM scrub:** samples are read from elsewhere in the cartridge, a little at first, then a lot. Around noon is off. |
-| Switch up | Bypass every mangle |
+| Switch up | **Repeat bar:** the section playing loops while the switch is up; back to the middle and the song carries on. (SET > SWITCH UP can make it BYPASS, PAUSE or nothing.) |
 | Switch down | Restart the song |
 
 The knobs have a wide dead zone at noon, so a knob left roughly in the middle changes nothing.
