@@ -80,7 +80,8 @@ You don't need anything patched to mangle a song:
   **REROLL CHAOS** or **CLEAR MANGLES**.
 - The **BASE** page sets each mangle's resting value in its own units: voice shift in programs,
   transpose in semitones, layers in tracks stripped, and so on. CV, knobs and buttons all add on
-  top. The page scrolls: there are 21 values.
+  top. The page scrolls: there are 21 values. LEFT/RIGHT change a value by 1. Hold A and UP/DOWN
+  change it by 10 instead of moving the cursor. A+B puts it back to zero.
 - **CLEAR MANGLES** (assign it to a button on the BTN page, or to a CV on MAP) puts every BASE
   value back to zero and switches off every latched button. It leaves tempo, transpose and fine
   pitch alone, because those are where the song sits rather than how it's mangled. It can't move a

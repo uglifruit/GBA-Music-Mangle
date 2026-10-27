@@ -446,13 +446,19 @@ static int s_baseTop;
 
 static void base_keys(uint16_t k)
 {
+    // LEFT/RIGHT step by 1, with or without A. Holding A turns UP/DOWN into steps of 10 instead of
+    // moving the cursor, and A+B (either order) zeros. A alone does nothing, so it is safe to hold.
     int *cur = &s_cursor[PAGE_BASE];
-    if (k & KEY_UP)   *cur = (*cur + BASE_ROWS - 1) % BASE_ROWS;
-    if (k & KEY_DOWN) *cur = (*cur + 1) % BASE_ROWS;
+    int aHeld = (g_btn & KEY_A) != 0;
+    if (!aHeld) {
+        if (k & KEY_UP)   *cur = (*cur + BASE_ROWS - 1) % BASE_ROWS;
+        if (k & KEY_DOWN) *cur = (*cur + 1) % BASE_ROWS;
+    }
     int dest = s_baseDest[*cur];
     int8_t *v = &g_patch.base[dest];
-    if (k & KEY_A) *v = 0;
+    if ((k & (KEY_A | KEY_B)) && (g_btn & (KEY_A | KEY_B)) == (KEY_A | KEY_B)) { *v = 0; return; }
     int d = (k & KEY_RIGHT) ? 1 : (k & KEY_LEFT) ? -1 : 0;
+    if (aHeld) d += (k & KEY_UP) ? 10 : (k & KEY_DOWN) ? -10 : 0;
     if (d) *v = (int8_t)step_clamp(*v, d, base_min(dest), base_max(dest));
 }
 
@@ -483,7 +489,7 @@ static void base_draw(void)
     // Where the window is: more above, more below.
     field(59, 214, 16, 2, s_baseTop > 0 ? "^" : "", COL_DIM);
     field(58, 214, 16 + (BASE_VISIBLE - 1) * 11, 2, s_baseTop + BASE_VISIBLE < BASE_ROWS ? "v" : "", COL_DIM);
-    field(60, 4, SCREEN_H - 10, 38, "LEFT/RIGHT CHANGE  A ZERO  L/R PAGE", COL_DIM);
+    field(60, 4, SCREEN_H - 10, 38, "LEFT/RIGHT 1  A+UP/DOWN 10  A+B ZERO", COL_DIM);
 }
 
 // ---- SET --------------------------------------------------------------------------------------
