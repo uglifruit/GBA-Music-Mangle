@@ -1,0 +1,131 @@
+draft: true
+Name: GBA Music Mangle
+short-description: "Boots a Game Boy Advance over the pulse jacks with a game cartridge still inserted, finds the game's own music, and plays it under the modular's control: clocked, restarted, transposed and mangled"
+Language: C++ (Pico SDK + ComputerCard) + C (GBA payload)
+Creator: Andy Jenkinson (uglifruit)
+Version: 0.1.0
+Status: Beta
+License: MIT
+repository: https://github.com/uglifruit/GBA-Music-Mangle
+Editor: none
+date-created: 2026-10-25
+date-updated: 2026-10-27
+
+contact:
+  social:
+    github: https://github.com/uglifruit
+
+uf2:
+  - path: UF2/gba_link.uf2
+    name: GBA Music Mangle 0.1.0
+
+tags:
+  - gba
+  - link-cable
+  - multi-boot
+  - sequencer
+  - glitch
+  - screen
+
+summary: |
+  Plays the music of a Game Boy Advance cartridge, under the control of your modular. Leave a game
+  in the GBA, hold START and SELECT as you switch it on, and the Workshop Computer loads its own
+  software over the link cable. The GBA then searches the cartridge for the game's music (most GBA
+  games use Nintendo's own MP2K "Sappy" sound engine), and plays it through its own engine, with
+  the game's instruments, from the cart itself. Games on other engines are named on screen (GAX,
+  Krawall). Same cable as GBA PSG Voice and GBA FM Voice.<br><br>
+
+  CLOCK AND STRUCTURE. Pulse In 2 clocks the song (1 to 24 PPQN, smoothed); unpatched, songs play
+  at their own tempo. Audio In 1 restarts the song, Audio In 2 restarts the bar (a beat-repeat from
+  a clock divider), and RESTART LOOP skips a song's intro. Restarts can happen at once or wait for
+  the end of the bar. The switch held up repeats the bar playing; down restarts the song.<br><br>
+
+  MANGLING. Every input, knob and GBA button can drive any of 29 destinations: voice shift and
+  instrument-table offset, sample start and end, ROM scrub (samples read from anywhere in the
+  cart), transpose (1V/oct), tempo, layers, solo and mute, reverse and note drop, rate and bit
+  crush, the envelope (attack, decay, sustain, release), note length, reverb, vibrato and trill,
+  tremolo and gate, and CHAOS: per-note dice for jumps, pans, instrument swaps and raw-cart
+  samples, as a pattern that repeats every loop or as free chaos. Out of the box the main knob is
+  CHAOS and the GBA's buttons restart the bar, reroll the chaos, transpose and clear it all.<br><br>
+
+  THE GBA SCREEN. Play page with all sixteen tracks and every mangle live; MAP, BTN and BASE pages
+  for the mappings, SET, 16 memory slots, and CAL. A saved slot remembers its cart, so the next
+  boot with that cart skips the scan.<br><br>
+
+  See README.md for the full manual.
+
+panel:
+  inputs:
+    - id: PulseIn2
+      name: Clock
+      description: Clocks the song's sequencer at the PPQN set on the SET page (1, 2, 4, 8, 12 or 24), with the rest of each pulse's ticks spread evenly. Unpatched, songs play at their own tempo
+    - id: AudioIn1
+      name: Reset
+      description: A rising edge restarts the song, aligned to the clock (or at the end of the bar, if SET > RESTARTS says so). Re-assignable on the MAP page
+    - id: AudioIn2
+      name: Restart bar
+      description: A rising edge jumps back to the start of the current bar. From a clock divider it is a beat-repeat. Re-assignable on the MAP page
+    - id: CVIn1
+      name: Voice shift
+      description: Swaps every instrument for one further along (or back down) the game's instrument table. Re-assignable on the MAP page
+    - id: CVIn2
+      name: Transpose
+      description: 1V/oct, in semitones, either side of 0 V. Re-assignable on the MAP page
+    - id: PulseIn1
+      name: GBA SO (MISO)
+      description: Serial data back from the GBA. Read directly via PIO, not the 48kHz pulse path
+  outputs:
+    - id: PulseOut1
+      name: GBA SC (clock)
+      description: Master serial clock driven by the RP2040 (PIO), inversion handled in hardware
+    - id: PulseOut2
+      name: GBA SI (MOSI)
+      description: Serial data to the GBA (payload upload, then the live input stream)
+    - id: CVOut2
+      name: Track pitch
+      description: The followed track's note as calibrated 1V/oct (choose the track on the SET page)
+    - id: CVOut1
+      name: Track gate
+      description: High while the followed track's note is held, dropping briefly between legato notes
+    - id: AudioOut1
+      name: Beat
+      description: A 5ms pulse on every beat of the song
+    - id: AudioOut2
+      name: Loop
+      description: A 5ms pulse each time the song loops
+
+controls:
+  knobs:
+    - main:
+        name: Chaos
+        description: Right of noon, per-note chaos as a pattern that repeats every loop; left of noon, free chaos. Noon is clean
+      x:
+        name: Tempo
+        description: The song's tempo, x0.25 to x4, when not externally clocked. Noon is the song's own tempo
+      y:
+        name: ROM scrub
+        description: Samples are read from elsewhere in the cartridge, a little at first, then a lot, either way. Noon is off
+
+  switch:
+    up:
+      name: Repeat bar
+      description: The bar playing loops while the switch is up; back to the middle and the song carries on
+    down:
+      name: Restart
+      description: Momentary down restarts the song
+
+  leds:
+    - display: list
+      items:
+        - id: LED0
+          name: Link (solid booted, blinking connecting)
+        - id: LED1
+          name: Clock in / upload progress / fault code bit 0
+        - id: LED2
+          name: Followed track's gate / upload progress / fault code bit 1
+        - id: LED3
+          name: Beat / upload progress / fault code bit 2
+        - id: LED4
+          name: Loop / upload progress
+        - id: LED5
+          name: Editing on the GBA / upload progress

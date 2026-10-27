@@ -22,6 +22,10 @@ an assistant.
   `docs/PLAYER_SPEC.md`, on branch `codex/mp2k-player`, merged 2026-10-26. It passed the spec's checks.
   **The spec is the contract**: `player.h` is its interface. Changing a hook's meaning means
   changing the spec too.
+- **`info.yaml`** (added 2026-10-27, `draft: true`, version 0.1.0) follows FM's layout. It passes
+  the monorepo validator from the local clone: `cd ..\Workshop_Computer && node
+  tools/sitegen/src/validate/cli.js <path to this info.yaml>`. Keep its panel, knob and switch
+  descriptions in step with the factory map (mod.h) and README.
 - **First hardware report 2026-10-26:** START+SELECT multiboot with a cart inserted WORKS, and the
   scan found 416 songs on Pokémon Ruby (AXVE). Playback "didn't sound like songs": the list then
   started on ALL (Ruby's first ~250 are effects), and an unpatched CV1 reading a count below 0 shifted

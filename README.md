@@ -2,16 +2,17 @@
 
 A card for the Music Thing Modular **Workshop Computer**. It boots a Game Boy Advance over the link
 cable while a game cartridge stays inserted. The GBA finds the game's own music, and plays it so your
-modular can drive it: clock it, restart it, strip its tracks back, transpose it, and mangle its
-instruments and samples. This works with any game that uses Nintendo's MP2K ("Sappy") sound engine,
-which most GBA games do.
+modular can drive it: clock it, restart it, loop its bars, strip its tracks back, transpose it, and
+mangle its instruments, samples and envelopes, up to per-note CHAOS. This works with any game that
+uses Nintendo's MP2K ("Sappy") sound engine, which most GBA games do.
 
 Siblings: [89_GBA](https://github.com/uglifruit/89_GBA) (GBA PSG Voice) and
 [GBA_FM](https://github.com/uglifruit/GBA_FM) (GBA FM Voice). All three use the same cable and
 link.
 
-**Status: beta, not yet tested on hardware.** The engine has been verified on the PC (see
-"Testing").
+**Status: beta.** Booting with a cartridge in, the scan and playback have been tried on hardware
+(Pokémon Ruby). Everything is verified on the PC (see "Testing"); the newest features have not all
+been played on hardware yet.
 
 ## Starting up
 
@@ -19,7 +20,7 @@ link.
    Pulse In 1 ← SO, and ground. This is the same cable as the sibling cards.
 2. Put a game cartridge in the GBA.
 3. **Hold START + SELECT while you switch the GBA on.** This tells the GBA to skip the cartridge
-   and wait for the Workshop. The Workshop's LEDs show upload progress (about 8 seconds).
+   and wait for the Workshop. The Workshop's LEDs show upload progress (about 10 seconds).
 4. The GBA scans the cartridge for music, shows how many songs it found, and starts the first piece
    of music (sound effects are listed separately; see "Song tables and sound effects").
 
@@ -75,10 +76,11 @@ You don't need anything patched to mangle a song:
   | Right | More chaos (each press adds some; Left clears it) |
 
   Each button can **HOLD** a mangle while pressed, **LATCH** it on and off, or **STEP** its base
-  value. It can also fire a clock, a reset, the next song, or **CLEAR MANGLES**.
+  value. It can also fire a clock, a reset, the next song, **RESTART LOOP**, **RESTART BAR**,
+  **REROLL CHAOS** or **CLEAR MANGLES**.
 - The **BASE** page sets each mangle's resting value in its own units: voice shift in programs,
   transpose in semitones, layers in tracks stripped, and so on. CV, knobs and buttons all add on
-  top. The page scrolls: there are twenty values.
+  top. The page scrolls: there are 21 values.
 - **CLEAR MANGLES** (assign it to a button on the BTN page, or to a CV on MAP) puts every BASE
   value back to zero and switches off every latched button. It leaves tempo, transpose and fine
   pitch alone, because those are where the song sits rather than how it's mangled. It can't move a
@@ -99,6 +101,10 @@ These reach into the engine's own controls, on every voice (samples and Game Boy
 | VIBRATO | Wobbles the pitch of every track. A small amount (4–10) is a normal vibrato. |
 | TREMOLO | Wobbles the volume of every track. |
 | LFO SPEED | The vibrato and tremolo rate, ×¼ to ×4 around the engine's usual 5 Hz. |
+
+The envelope changes act on notes already sounding, so holding a button (say B on RELEASE, HOLD,
+amount 40) stretches the tails of whatever is playing. None of these are in the factory map;
+assign them on MAP and BTN.
 
 ### Both sides of noon
 
@@ -152,10 +158,6 @@ same note gets the same treatment each time round. **REROLL CHAOS** deals a new 
 the main knob or a CV, and REROLL on a button, then reroll until a pattern grabs you. CLEAR MANGLES
 stops it, and so does the switch when SET > SWITCH UP is BYPASS.
 
-The envelope changes act on notes already sounding, so holding a button (say B on RELEASE, HOLD,
-amount 40) stretches the tails of whatever is playing. None of these are in the factory map;
-assign them on MAP and BTN.
-
 ### Song tables and sound effects
 
 Some cartridges contain more than one set of music. A two-games-in-one cart has one per game. The
@@ -194,9 +196,10 @@ The knobs have a wide dead zone at noon, so a knob left roughly in the middle ch
 
 Audio comes out of the GBA's own headphone socket.
 
-Other things the MAP page can assign: next song, song select by CV, table offset (reads the
-instrument table from the wrong place), solo, fine pitch, reverse (a chance each note plays
-backwards), crush, the sound destinations above, and CLEAR MANGLES (a gate clears them).
+Other things the MAP page can assign: next song, song select by CV, layers, start / end, table
+offset (reads the instrument table from the wrong place), solo / mute, fine pitch, reverse / drop,
+crush, the sound destinations above, RESTART LOOP, REROLL CHAOS, and CLEAR MANGLES (a gate clears
+them).
 
 The CAL page shows SVC, the share of each millisecond the modulator and clock take.
 
