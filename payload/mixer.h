@@ -23,6 +23,7 @@
 #define MIX_NOLOOP       0xFFFFFFFFu
 
 #define MIX_F_REVERSE    0x01
+#define MIX_F_UNSIGNED   0x02    // 8-bit samples stored offset-binary (0x80 = silence): Krawall, GAX
 
 typedef struct {
     // ---- written by the control layer (starts under IME-off; step/vol any time) ----

@@ -27,6 +27,7 @@
 #include "rom.h"
 #include "scan.h"
 #include "player.h"
+#include "engine.h"
 #include "clock.h"
 #include "mod.h"
 #include "ui.h"
@@ -130,7 +131,8 @@ static int boot_from_slot(void)
     volatile uint8_t *d = (volatile uint8_t *)&s_bootPatch;
     for (unsigned i = 0; i < sizeof(Patch); i++) d[i] = g_patchBuf[i];
     if (!mod_patch_accept(&s_bootPatch) || !mod_patch_is_this_cart(&s_bootPatch)) return 0;
-    if (!scan_install(s_bootPatch.tableCount, s_bootPatch.tableAddr, s_bootPatch.tableRate)) return 0;
+    if (!scan_install(s_bootPatch.tableCount, s_bootPatch.tableAddr, s_bootPatch.tableRate,
+                      s_bootPatch.tableEngine)) return 0;
     s_bootSlot = (uint8_t)slot;
     return 1;
 }
@@ -144,7 +146,7 @@ static void scan_cart(int allowSaved)
     ui_scan_begin();
     if (!(allowSaved && boot_from_slot())) {
         ui_scan_status("SCANNING FOR MUSIC", "");
-        scan_run(scan_progress);
+        scan_run(scan_progress, !allowSaved && g_ui_rescanFull);
     }
     ui_scan_result(s_bootSlot);
     g_plGameRate = g_scan.gameRate;
@@ -168,10 +170,11 @@ static void hold_result(void)
 // (a dusty contact on the first read) can be repeated without a power cycle.
 static void rescan(void)
 {
-    player_stop();
+    mod_stop();
     uint8_t up = s_engineUp;
     s_engineUp = 0;
     scan_cart(0);                           // a rescan always scans
+    eng_follow_table();
     s_engineUp = up;
     hold_result();
     if (g_songCount) mod_song_select(0);
@@ -193,13 +196,15 @@ int main(void)
     // ---- 5. sound, player, clock, modulator ----
     audio_init();
     player_init();
+    eng_follow_table();                     // the first table's engine (MP2K unless the scan says)
     clock_init();
     mod_init();
     s_engineUp = 1;
     g_ui_rescan = rescan;
 
-    // Let the scan result be read (about a second and a half), then start the first song. With no
-    // music it stays up until a button is pressed: it is the only thing worth reading.
+    // Let the scan result be read (about a second and a half), then CUE the first song: nothing
+    // plays until PLAY. With no music it stays up until a button is pressed: it is the only thing
+    // worth reading.
     hold_result();
     if (g_songCount) mod_song_select(0);
     if (s_bootSlot != 0xFF) {

@@ -1,9 +1,11 @@
 // scan.c — MP2K song-table detection. See scan.h for the methods.
 
 #include "scan.h"
+#include "engine.h"
 #include "rom.h"
 #include "m4a.h"
 #include "gba.h"
+#include "player.h"
 
 ScanResult g_tables[SCAN_MAX_TABLES];
 uint8_t    g_tableCount;
@@ -11,6 +13,7 @@ uint8_t    g_tableIx;
 uint8_t    g_listMode;
 uint16_t   g_songIx[SCAN_MAX_SONGS];
 uint8_t    g_songPlayer[SCAN_MAX_SONGS];
+uint8_t    g_songKind[SCAN_MAX_SONGS];
 uint16_t   g_songCount;
 uint8_t    g_engines;
 uint16_t   g_xmCount;
@@ -94,21 +97,41 @@ static const uint8_t kSelectSong[30] = {
 
 #define CHUNK 0x10000u      // progress / link-service granularity: 64 KB
 
-// Progress is done/total in 1/256ths. total is twice the ROM size, a power of two, so the divide is
-// a shift - a divide by a variable would be a LINK error here (-nostdlib), which is the point.
-static uint32_t s_progShift;
-#define PROGRESS(done) ((done) >> s_progShift)
+// Progress, in 1/256ths of the whole scan, shared among however many passes run: each pass gets a
+// span of the bar from its base, and reports CHUNKs done. The ROM size is a power of two, so the
+// fraction of a pass is a shift - a divide by a variable would be a LINK error here (-nostdlib),
+// which is the point.
+static ScanProgressFn s_progress;
+static uint32_t s_romShift;            // log2(g_romSize)
+static uint32_t s_progBase, s_progSpan, s_progDone;
+
+static void prog_pass(uint32_t base, uint32_t span) { s_progBase = base; s_progSpan = span; s_progDone = 0; }
+
+static void prog_chunk(void)
+{
+    s_progDone += CHUNK;
+    if (!s_progress) return;
+    uint32_t f = s_romShift > 8 ? s_progDone >> (s_romShift - 8) : s_progDone << (8 - s_romShift);
+    if (f > 256) f = 256;
+    s_progress(s_progBase + ((f * s_progSpan) >> 8));
+}
 
 // The hot loop of the signature search: the next 4-aligned word in [from, to) whose low halfword
 // is 0xB500 (PUSH {LR}, how the routine opens). Every candidate is then compared loosely, which is
 // far too slow to do at every one of eight million offsets but cheap for the few thousand that
 // survive this. In IWRAM because it reads up to 32 MB.
+// The other engines' sniff rides on it (since 2026-11-01; it was in the heuristic pass): every word
+// is hashed into the filter, so a cart's GAX or Krawall text is known after this one pass, whether
+// or not it also holds MP2K - a cart can use more than one engine.
 IWRAM_CODE static uint32_t next_push_lr(uint32_t from, uint32_t to)
 {
     const volatile uint32_t *p = (const volatile uint32_t *)ROM_PTR(from);
     uint32_t n = (to - from) >> 2;
     for (uint32_t i = 0; i < n; i++) {
-        if ((p[i] & 0xFFFFu) == 0xB500u) return from + (i << 2);
+        uint32_t w = p[i];
+        uint32_t h = SNIFF_HASH(w);
+        if (s_sniffBits[h >> 5] & (1u << (h & 31))) sniff_hit(from + (i << 2), w);
+        if ((w & 0xFFFFu) == 0xB500u) return from + (i << 2);
     }
     return to;
 }
@@ -149,7 +172,7 @@ static int entry_ok(uint32_t e, int *tracks)
     return scan_header_ok(rom_u32(SONG_HEADER(e)), tracks);
 }
 
-static int find_signature(ScanProgressFn progress, uint32_t *done)
+static int find_signature(void)
 {
     for (uint32_t base = ROM_BASE; base < g_romEnd; base += CHUNK) {
         uint32_t end = base + CHUNK;
@@ -161,13 +184,12 @@ static int find_signature(ScanProgressFn progress, uint32_t *done)
             if ((table & 3) || !rom_ok(table, SONG_ENTRY_SIZE)) continue;
             add_table(SCAN_SIGNATURE, a, table);        // keep going: there may be another copy
         }
-        *done += CHUNK;
-        if (progress) progress(PROGRESS(*done));
+        prog_chunk();
     }
     return g_tableCount != 0;
 }
 
-static int find_heuristic(ScanProgressFn progress, uint32_t *done)
+static int find_heuristic(void)
 {
     // The longest few runs, kept sorted longest first.
     uint32_t best[SCAN_MAX_TABLES], bestLen[SCAN_MAX_TABLES];
@@ -179,8 +201,6 @@ static int find_heuristic(ScanProgressFn progress, uint32_t *done)
             // Cheap prefilter before any header is followed: a word-aligned pointer into the
             // image, and a small player index after it.
             uint32_t w = *(const volatile uint32_t *)ROM_PTR(a);
-            uint32_t h = SNIFF_HASH(w);
-            if (s_sniffBits[h >> 5] & (1u << (h & 31))) sniff_hit(a, w);
             if ((w & 3) || !rom_isptr(w)) continue;
             if (!rom_ok(a, 8) || rom_u16(a + 4) >= 32) continue;
 
@@ -202,8 +222,7 @@ static int find_heuristic(ScanProgressFn progress, uint32_t *done)
             }
             if (len) a += (len - 1) * SONG_ENTRY_SIZE;     // a run is never a candidate twice
         }
-        *done += CHUNK;
-        if (progress) progress(PROGRESS(*done));
+        prog_chunk();
     }
     for (int i = 0; i < nBest; i++) add_table(SCAN_HEURISTIC, 0, best[i]);
     return g_tableCount != 0;
@@ -260,17 +279,85 @@ static uint32_t find_sound_mode(uint32_t selectSong)
     return found;
 }
 
+void scan_add_table(uint8_t engine, uint32_t root)
+{
+    uint8_t n = g_tableCount;
+    add_table(SCAN_HEURISTIC, 0, root);
+    if (g_tableCount > n) g_tables[n].engine = engine;
+}
+
 static void add_table(uint8_t method, uint32_t selectSong, uint32_t table)
 {
     for (int i = 0; i < g_tableCount; i++) if (g_tables[i].songTable == table) return;
     if (g_tableCount >= SCAN_MAX_TABLES) return;
     ScanResult *t = &g_tables[g_tableCount++];
     t->method       = method;
+    t->engine       = 0;                                    // ENG_ID_MP2K
     t->selectSong   = selectSong;
     t->songTable    = table;
     t->tableEntries = 0;
     t->soundMode    = selectSong ? find_sound_mode(selectSong) : 0;
     t->gameRate     = t->soundMode ? gM4aRates[((t->soundMode >> 16) & 0xF) - 1] : 13379;
+}
+
+// THE LIST, and every song's KIND. A table's whole playable list is built once (the MP2K kinds
+// need a walk of each song's first track, a second or so for a big game), cached, and filtered by
+// the list mode on every select.
+static uint16_t s_allIx[SCAN_MAX_SONGS];
+static uint8_t  s_allPlayer[SCAN_MAX_SONGS], s_allKind[SCAN_MAX_SONGS];
+static uint16_t s_allCount;
+static uint8_t  s_allTable = 0xFF;      // table index the cache holds, 0xFF = none
+static uint32_t s_allAddr;              // ... and its address, so a rescan cannot reuse a stale one
+
+void scan_forget(void) { s_allTable = 0xFF; }
+
+static uint8_t mp2k_kind(uint32_t entry, uint32_t player)
+{
+    uint32_t ticks;
+    int loops = player_song_shape(entry, &ticks);
+    if (loops < 0) return KIND_MUSIC;                   // unsure: treat it as a song
+    if (ticks < KIND_SFX_TICKS && (!loops || player != 0)) return KIND_SFX;
+    return loops ? KIND_MUSIC : KIND_JINGLE;
+}
+
+// The MP2K table's playable entries: a header with at least one track, consecutive duplicates
+// dropped. With kinds = 0 it only asks whether there is one (for drop_empty).
+static int mp2k_list(ScanResult *t, int kinds)
+{
+    uint32_t prevHdr = 0;
+    int n = 0;
+    t->tableEntries = 0;
+    for (uint32_t i = 0; i < 0xFFFF; i++) {
+        uint32_t e = t->songTable + i * SONG_ENTRY_SIZE;
+        if (!rom_ok(e, SONG_ENTRY_SIZE)) break;
+        uint32_t hdr = rom_u32(SONG_HEADER(e));
+        if (!rom_isptr(hdr)) break;                         // saptapper's end-of-table rule
+        t->tableEntries = (uint16_t)(i + 1);
+        uint32_t ms = rom_u16(SONG_MS(e));
+        int tc;
+        if (hdr != prevHdr && scan_header_ok(hdr, &tc) && tc > 0 && n < SCAN_MAX_SONGS) {
+            if (!kinds) return 1;
+            s_allPlayer[n] = (uint8_t)(ms > 255 ? 255 : ms);
+            s_allKind[n]   = mp2k_kind(e, ms);
+            s_allIx[n++]   = (uint16_t)i;
+        }
+        prevHdr = hdr;
+    }
+    return n;
+}
+
+static void build_all(int table)
+{
+    ScanResult *t = &g_tables[table];
+    if (s_allTable == table && s_allAddr == t->songTable) return;
+    if (t->engine == ENG_ID_MP2K) s_allCount = (uint16_t)mp2k_list(t, 1);
+    else {
+        s_allCount = (uint16_t)eng_table_songs(t, s_allIx, s_allKind, SCAN_MAX_SONGS);
+        for (int n = 0; n < s_allCount; n++) s_allPlayer[n] = 0;
+        t->tableEntries = s_allCount;
+    }
+    s_allTable = (uint8_t)table;
+    s_allAddr  = t->songTable;
 }
 
 int scan_select(int table, int listMode)
@@ -281,112 +368,155 @@ int scan_select(int table, int listMode)
     g_listMode  = (uint8_t)listMode;
     g_songCount = 0;
     if (g_tableCount == 0) return 0;
-
-    uint32_t prevHdr = 0;
-    g_scan.tableEntries = 0;
-    for (uint32_t i = 0; i < 0xFFFF; i++) {
-        uint32_t e = g_scan.songTable + i * SONG_ENTRY_SIZE;
-        if (!rom_ok(e, SONG_ENTRY_SIZE)) break;
-        uint32_t hdr = rom_u32(SONG_HEADER(e));
-        if (!rom_isptr(hdr)) break;                         // saptapper's end-of-table rule
-        g_scan.tableEntries = (uint16_t)(i + 1);
-        uint32_t ms = rom_u16(SONG_MS(e));
-        int want = (listMode == LIST_ALL) || ((listMode == LIST_MUSIC) == (ms == 0));
-        int tc;
-        if (want && hdr != prevHdr && scan_header_ok(hdr, &tc) && tc > 0 && g_songCount < SCAN_MAX_SONGS) {
-            g_songPlayer[g_songCount] = (uint8_t)(ms > 255 ? 255 : ms);
-            g_songIx[g_songCount++]   = (uint16_t)i;
-        }
-        prevHdr = hdr;
+    build_all(table);
+    // MUSIC lists songs and jingles (anything long); SFX the short ones.
+    for (int n = 0; n < s_allCount; n++) {
+        uint8_t k = s_allKind[n];
+        int want = listMode == LIST_ALL || ((listMode == LIST_SFX) == (k == KIND_SFX));
+        if (!want) continue;
+        g_songIx[g_songCount]     = s_allIx[n];
+        g_songPlayer[g_songCount] = s_allPlayer[n];
+        g_songKind[g_songCount++] = k;
     }
     return g_songCount;
 }
 
 // Drop tables with no playable song at all (false positives), so the count means something.
-// Returns the tables kept.
+// Returns the tables kept. A yes/no per table: no kinds are worked out here.
 static int drop_empty(void)
 {
     int found = g_tableCount, keep = 0;
     for (int i = 0; i < found; i++) {
-        g_tableCount = (uint8_t)found;
-        if (scan_select(i, LIST_ALL) == 0) continue;
+        ScanResult *t = &g_tables[i];
+        int has = t->engine == ENG_ID_MP2K ? mp2k_list(t, 0) : eng_table_songs(t, s_allIx, s_allKind, 1);
+        if (!has) continue;
         if (keep != i) {
             volatile uint8_t *d = (volatile uint8_t *)&g_tables[keep];
-            const volatile uint8_t *s = (const volatile uint8_t *)&g_tables[i];
-            for (unsigned b = 0; b < sizeof(ScanResult); b++) d[b] = s[b];
+            const volatile uint8_t *src = (const volatile uint8_t *)&g_tables[i];
+            for (unsigned b = 0; b < sizeof(ScanResult); b++) d[b] = src[b];
         }
         keep++;
     }
     g_tableCount = (uint8_t)keep;
     g_tableIx = 0;
+    s_allTable = 0xFF;
     return keep;
 }
 
-int scan_run(ScanProgressFn progress)
+static void reset_tables(void)
 {
     g_tableCount = 0;
     g_tableIx    = 0;
     g_songCount  = 0;
+    s_allTable   = 0xFF;
     g_tables[0].method       = SCAN_NONE;
+    g_tables[0].engine       = ENG_ID_MP2K;
     g_tables[0].selectSong   = 0;
     g_tables[0].songTable    = 0;
     g_tables[0].tableEntries = 0;
     g_tables[0].soundMode    = 0;
     g_tables[0].gameRate     = 13379;
-    if (g_romSize == 0) return SCAN_NONE;
+}
 
-    // Progress runs 0..128 for the signature pass and 128..256 for the heuristic, so the bar keeps
-    // moving forward if the first pass comes up empty.
-    uint32_t total = g_romSize * 2, done = 0;
-    s_progShift = 0;
-    while ((total >> s_progShift) > 256u) s_progShift++;
-    sniff_init();
-    find_signature(progress, &done);
-    // The heuristic (and the engine sniff riding on it) runs when the signature found no table
-    // with a playable song - none at all, or only false positives.
-    if (drop_empty() == 0) {
-        done = g_romSize;
-        find_heuristic(progress, &done);
-        drop_empty();
+// One other engine's discovery pass over the whole cart, sliced so the link and the bar stay alive.
+static void engine_pass(uint8_t engine)
+{
+    for (uint32_t base = ROM_BASE; base < g_romEnd; base += CHUNK) {
+        uint32_t end = base + CHUNK;
+        if (end > g_romEnd) end = g_romEnd;
+        eng_discover_slice(engine, base, end);
+        prog_chunk();
     }
+    eng_discover_finish(engine);
+}
+
+// Start on the first table with MUSIC (songs and jingles), else the first table's ALL.
+static void select_first(void)
+{
+    for (int i = 0; i < g_tableCount; i++) if (scan_select(i, LIST_MUSIC)) return;
+    scan_select(0, LIST_ALL);
+}
+
+static void note_engines(void)
+{
+    for (int i = 0; i < g_tableCount; i++) if (g_tables[i].engine == ENG_ID_MUSYX) g_engines |= ENG_MUSYX;
+}
+
+static void rom_shift(void)
+{
+    s_romShift = 0;
+    while (g_romSize && (1u << s_romShift) < g_romSize) s_romShift++;
+}
+
+int scan_run(ScanProgressFn progress, int full)
+{
+    reset_tables();
+    if (g_romSize == 0) return SCAN_NONE;
+    s_progress = progress;
+    rom_shift();
+    eng_discover_reset();
+    sniff_init();
+
+    // 1. MP2K's signature, with the sniff riding on it: half the bar until we know what else runs.
+    prog_pass(0, 128);
+    find_signature();
+    int mp2k = drop_empty();
+    // Which other passes: the heuristic only without a signature table; GAX and Krawall when their
+    // text is in the cart; MusyX (which leaves no text) when nothing else turns up. FULL: all.
+    int heur = !mp2k;
+    int gax  = full || (g_engines & ENG_GAX);
+    int krw  = full || (g_engines & ENG_KRAWALL);
+    int passes = heur + gax + krw + 1;                  // + MusyX, until we know it is not needed
+    static const uint8_t span[5] = { 128, 128, 64, 42, 32 };
+    uint32_t base = 128, each = span[passes];
+    if (heur) { prog_pass(base, each); find_heuristic(); drop_empty(); base += each; }
+    if (gax)  { prog_pass(base, each); engine_pass(ENG_ID_GAX); drop_empty(); base += each; }
+    if (krw)  { prog_pass(base, each); engine_pass(ENG_ID_KRAWALL); drop_empty(); base += each; }
+    if (full || g_tableCount == 0) { prog_pass(base, each); engine_pass(ENG_ID_MUSYX); drop_empty(); }
     if (progress) progress(256);
+    note_engines();
     if (g_tableCount == 0) {
-        g_tableIx = 0;
-        g_songCount = 0;
-        g_tables[0].method = SCAN_NONE;
+        reset_tables();
         return SCAN_NONE;
     }
-    // Start on the MUSIC list when there is any. Games often put the effects first (Pokemon's
-    // first 250-odd songs are effects), and song 1 should be a song.
-    if (scan_select(0, LIST_MUSIC) == 0) scan_select(0, LIST_ALL);
+    select_first();
     return g_scan.method;
 }
 
-int scan_install(int n, const uint32_t *addr, const uint16_t *rate)
+int scan_install(int n, const uint32_t *addr, const uint16_t *rate, const uint8_t *engine)
 {
-    g_tableCount = 0;
-    g_tableIx    = 0;
-    g_songCount  = 0;
+    reset_tables();
     sniff_init();
+    eng_discover_reset();
+    s_progress = 0;
+    rom_shift();
+    uint8_t rerun = 0;                                  // ENG_ID bits whose discovery must run again
     for (int i = 0; i < n && i < SCAN_MAX_TABLES; i++) {
+        uint8_t e = engine[i] < ENG_ID_COUNT ? engine[i] : ENG_ID_MP2K;
         uint32_t a = addr[i];
+        // GAX and Krawall keep their song lists in their own discovery (scattered headers; modules
+        // and their banks): a saved table of theirs runs that one pass again, still far less than
+        // the whole scan.
+        if (e == ENG_ID_GAX || e == ENG_ID_KRAWALL) { rerun |= (uint8_t)(1u << e); continue; }
         if ((a & 3) || !rom_ok(a, SONG_ENTRY_SIZE)) continue;
         ScanResult *t = &g_tables[g_tableCount++];
         t->method       = SCAN_SAVED;
+        t->engine       = e;
         t->selectSong   = 0;
         t->songTable    = a;
         t->tableEntries = 0;
         t->soundMode    = 0;
         t->gameRate     = (rate[i] >= 5734 && rate[i] <= 42048) ? rate[i] : 13379;
     }
+    if (rerun & (1u << ENG_ID_GAX))     engine_pass(ENG_ID_GAX);
+    if (rerun & (1u << ENG_ID_KRAWALL)) engine_pass(ENG_ID_KRAWALL);
+    for (int i = 0; i < g_tableCount; i++) g_tables[i].method = SCAN_SAVED;
     if (drop_empty() == 0) {
-        g_tables[0].method   = SCAN_NONE;
-        g_tables[0].songTable = 0;
-        g_tables[0].gameRate = 13379;
-        g_songCount = 0;
+        reset_tables();
         return 0;
     }
-    if (scan_select(0, LIST_MUSIC) == 0) scan_select(0, LIST_ALL);
+    note_engines();
+    select_first();
     return g_tableCount;
 }
 

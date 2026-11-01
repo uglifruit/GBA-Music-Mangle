@@ -2,6 +2,7 @@
 
 #include "clock.h"
 #include "player.h"
+#include "engine.h"
 #include "gba.h"
 
 #define REG_TM2CNT_L R16(0x0108)
@@ -103,7 +104,7 @@ void clock_pulse(void)
 
     // Whatever the last pulse still owed is played NOW, before this pulse's first tick: the song
     // stays locked to the pulse count even if the clock just sped up.
-    while (s_extDue) { player_tick(); s_extDue--; }
+    while (s_extDue) { g_eng->tick(); s_extDue--; }
 
     if (s_havePulse) {
         uint32_t p = now - s_lastPulse;
@@ -132,13 +133,13 @@ void clock_pulse(void)
     } else {
         // No period yet (the first pulse after a stop): assume the song's own tempo for the spread.
         // One tick at tempoI is 16384 x 150 / (tempoI x 59.7275) = 41148 / tempoI counts.
-        s_interval = udiv32(41148u, player_tempo_i());
+        s_interval = udiv32(41148u, g_eng->tempo_i());
     }
     if (s_interval == 0) s_interval = 1;
 
     g_clkExtLive = 1;
     s_tickAcc = 0;
-    player_tick();
+    g_eng->tick();
     s_extDue  = (uint8_t)(tpp - 1);
     s_extNext = now + s_interval;
 }
@@ -152,7 +153,7 @@ void clock_reset(void)
         // sequencer, and the link delivers them a poll or two apart) belongs to that pulse: play
         // the restarted song's first tick now and spread the rest from the pulse's own time.
         if (s_havePulse && now - s_lastPulse < RESET_WINDOW) {
-            player_tick();
+            g_eng->tick();
             s_extDue  = (uint8_t)(ticks_per_pulse() - 1);
             s_extNext = s_lastPulse + s_interval;
         }
@@ -176,31 +177,31 @@ IWRAM_CODE void clock_service(void)
     s_frameAcc += dt * 1000u;
     for (int n = 0; s_frameAcc >= FRAME_MILLI; n++) {
         s_frameAcc -= FRAME_MILLI;
-        if (n < 4) player_frame();
+        if (n < 4) g_eng->frame();
     }
 
     if (ext_active(now)) {
         g_clkExtLive = 1;
         int n = 0;
         while (s_extDue && (int32_t)(now - s_extNext) >= 0 && n++ < MAX_CATCHUP) {
-            player_tick();
+            g_eng->tick();
             s_extDue--;
             s_extNext += s_interval;
         }
     } else {
         g_clkExtLive = 0;
-        uint32_t ti = player_tempo_i();
+        uint32_t ti = g_eng->tempo_i();
         g_clkBpm = (uint16_t)ti;
-        if (g_clkRun && player_running()) {
+        if (g_clkRun && g_eng->running()) {
             s_tickAcc += dt * ti * TICK_Q24_PER_TEMPO;
             int n = 0;
             while (s_tickAcc >= TICK_ONE && n++ < MAX_CATCHUP) {
                 s_tickAcc -= TICK_ONE;
-                player_tick();
+                g_eng->tick();
             }
             if (s_tickAcc >= TICK_ONE) s_tickAcc = TICK_ONE - 1;
         }
     }
 
-    player_update();
+    g_eng->update();
 }

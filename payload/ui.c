@@ -10,6 +10,7 @@
 #include "gfx.h"
 #include "mod.h"
 #include "player.h"
+#include "engine.h"
 #include "clock.h"
 #include "scan.h"
 #include "rom.h"
@@ -31,6 +32,7 @@
 #define CW 6                       // character advance
 
 uint8_t g_page = PAGE_PLAY;
+uint8_t g_ui_rescanFull;
 void (*g_ui_rescan)(void);
 
 static const char *page_tab[PAGE_COUNT] = { "PLAY", "MAP", "BTN", "BASE", "SET", "MEM", "CAL" };
@@ -185,22 +187,36 @@ static void draw_statics(void)
 
 // ---- PLAY -------------------------------------------------------------------------------------
 
+// The PLAY page's cursor: the LIST row, the SONG row, then the tracks (0..15).
+#define PLAY_LIST (-2)
+#define PLAY_SONG (-1)
+
 static void play_keys(uint16_t k)
 {
     if (k & KEY_START)  { enter_page(s_editPage); return; }
     if (k & KEY_SELECT) { g_perform ^= 1; return; }
     if (g_perform) return;                // the buttons belong to the BTN map (mod.c)
 
+    // L/R cue from anywhere; only PLAY (A on the SONG row, or a mapped PLAY) plays.
     int *cur = &s_cursor[PAGE_PLAY];
     int tc = g_plTrackCount ? g_plTrackCount : 1;
     if (k & KEY_L) mod_song_step(-1);
     if (k & KEY_R) mod_song_step(1);
-    if (k & KEY_UP)    *cur = (*cur + PL_TRACKS - 1) & 15;
-    if (k & KEY_DOWN)  *cur = (*cur + 1) & 15;
-    if (k & (KEY_LEFT | KEY_RIGHT)) *cur = (*cur + 8) & 15;
-    if (*cur >= tc) *cur = (k & KEY_UP) ? tc - 1 : 0;
-    if (k & KEY_A) g_uiMute ^= (uint16_t)(1u << *cur);
-    if (k & KEY_B) g_uiSolo = (g_uiSolo == *cur) ? 0xFF : (uint8_t)*cur;
+    if (k & KEY_UP)   *cur = (*cur == PLAY_LIST) ? tc - 1 : *cur - 1;
+    if (k & KEY_DOWN) *cur = (*cur >= tc - 1) ? PLAY_LIST : *cur + 1;
+    if (*cur >= tc) *cur = tc - 1;        // a song with fewer tracks
+    int d = (k & KEY_RIGHT) ? 1 : (k & KEY_LEFT) ? -1 : 0;
+    if (*cur == PLAY_LIST) {
+        if (d) mod_set_list(g_tableIx, step_wrap(g_listMode, d, LIST_COUNT));
+    } else if (*cur == PLAY_SONG) {
+        if (d) mod_song_step(d);
+        if (k & KEY_A) mod_play();
+        if (k & KEY_B) mod_stop();
+    } else {
+        if (d) { *cur = (*cur + 8) & 15; if (*cur >= tc) *cur = 0; }
+        if (k & KEY_A) g_uiMute ^= (uint16_t)(1u << *cur);
+        if (k & KEY_B) g_uiSolo = (g_uiSolo == *cur) ? 0xFF : (uint8_t)*cur;
+    }
 }
 
 // "A:REV" for a BTN slot, for the PERFORM legend.
@@ -223,8 +239,13 @@ static void play_draw(void)
     char t[44];
     int a;
 
-    // Song, big: a scale-2 line, redrawn whole but only when its text changes.
-    a = put_str(t, 0, "SONG ");
+    // The CUE, big: a scale-2 line, redrawn whole but only when its text or colour changes. Green
+    // when it is what is playing; amber when it waits for PLAY. '>' when the cursor is on it.
+    int pcur = g_perform ? 0 : s_cursor[PAGE_PLAY];
+    int kind = g_song >= 0 ? g_songKind[g_song] : KIND_MUSIC;
+    int live = g_song >= 0 && g_song == g_songPlaying && g_eng->running();
+    a = put_str(t, 0, pcur == PLAY_SONG ? ">" : " ");
+    a = put_str(t, a, kind == KIND_SFX ? "SFX  " : kind == KIND_JINGLE ? "JNGL " : "SONG ");
     if (g_song >= 0) {
         a = put_dec(t, a, (uint32_t)g_song + 1, 3);
         a = put_str(t, a, "/");
@@ -233,39 +254,50 @@ static void play_draw(void)
         put_str(t, a, "---");
     }
     {
-        int same = 1;
-        for (int i = 0; i < FIELD_CH; i++) {
+        static uint16_t titleCol;
+        uint16_t col = live ? COL_OK : COL_WAIT;
+        int same = col == titleCol;
+        for (int i = 0; same && i < FIELD_CH; i++) {
             if (t[i] != s_cache[0][i]) { same = 0; break; }
             if (!t[i]) break;
         }
         if (!same) {
             for (int i = 0; i < FIELD_CH; i++) { s_cache[0][i] = t[i]; if (!t[i]) break; }
-            rect(4, 15, 13 * 12, 14, COL_BG);
-            text(4, 15, t, COL_OK, 2);
+            titleCol = col;
+            rect(0, 15, 13 * 12 + 4, 14, COL_BG);
+            text(0, 15, t, col, 2);
         }
     }
 
-    // Beside it: the table entry and its music player (P0 is the music), then table and list.
-    if (g_song >= 0) {
+    // Beside it: the table entry and its music player (P0 is the music) - or, while something
+    // else plays, what that is - then table and list.
+    if (g_songPlaying >= 0 && g_songPlaying != g_song && g_eng->running()) {
+        a = put_str(t, 0, "PLAYING ");
+        put_dec(t, a, (uint32_t)g_songPlaying + 1, 3);
+    } else if (g_song >= 0 && g_eng->id != ENG_ID_MP2K) {
+        a = put_str(t, 0, g_eng->name);                 // another engine: say which
+        a = put_str(t, a, a < 7 ? " #" : "#");          // "KRAWALL#003" just fits the field
+        put_dec(t, a, g_songIx[g_song], 3);
+    } else if (g_song >= 0) {
         a = put_str(t, 0, "#");
         a = put_dec(t, a, g_songIx[g_song], 4);
         a = put_str(t, a, " P");
         put_dec(t, a, g_songPlayer[g_song], 1);
     } else t[0] = 0;
-    field(1, 170, 14, 11, t, COL_DIM);
-    a = 0;
+    field(1, 170, 14, 11, t, live ? COL_DIM : COL_OK);
+    a = put_str(t, 0, pcur == PLAY_LIST ? ">" : "");
     if (g_tableCount > 1) {
-        a = put_str(t, 0, "T");
+        a = put_str(t, a, "T");
         a = put_dec(t, a, (uint32_t)g_tableIx + 1, 1);
         a = put_str(t, a, "/");
         a = put_dec(t, a, g_tableCount, 1);
         a = put_str(t, a, " ");
     }
     put_str(t, a, list_name[g_listMode < LIST_COUNT ? g_listMode : 0]);
-    field(5, 170, 23, 11, t, COL_DIM);
+    field(5, 170, 23, 11, t, pcur == PLAY_LIST ? COL_SEL : COL_DIM);
 
     // Clock.
-    if (!player_running())          a = put_str(t, 0, "STOPPED");
+    if (!g_eng->running())          a = put_str(t, 0, "STOPPED");
     else if (g_clkExtLive) {
         a = put_str(t, 0, "EXT ");
         a = put_dec(t, a, clk_ppqn[g_clkPpqnIx], 1);
@@ -287,7 +319,7 @@ static void play_draw(void)
     field(4, 170, 33, 7, g_plQueued ? "QUEUED" : g_plHoldBar ? "REPEAT" : g_bypass ? "BYPASS"
                          : g_perform ? "PERFORM" : "",
           (g_bypass || g_plQueued || g_plHoldBar) ? COL_WAIT : COL_TITLE);
-    bar(0, 220, 33, 14, 7, ((g_plTicks % 24) < 4 && player_running()) ? 14 : 0, COL_TITLE);
+    bar(0, 220, 33, 14, 7, ((g_plTicks % 24) < 4 && g_eng->running()) ? 14 : 0, COL_TITLE);
 
     // Tracks: two columns of eight.
     int tc = g_plTrackCount;
@@ -343,8 +375,10 @@ static void play_draw(void)
         put_str(t, a, " SEL:END");
         field(43, 4, 153, 38, t, COL_TITLE);
     } else {
-        field(42, 4, 144, 38, "L/R SONG  A MUTE  B SOLO  ARROWS TRACK", COL_DIM);
-        field(43, 4, 153, 38, "SELECT PERFORM  START EDIT", COL_DIM);
+        field(42, 4, 144, 38, pcur == PLAY_LIST ? "LEFT/RIGHT LIST: ALL MUSIC SFX"
+                              : pcur == PLAY_SONG ? "LEFT/RIGHT CUE  A PLAY  B STOP"
+                              : "L/R CUE  A MUTE  B SOLO  ARROWS TRACK", COL_DIM);
+        field(43, 4, 153, 38, "UP/DN ROW  SELECT PERFORM  START EDIT", COL_DIM);
     }
 }
 
@@ -372,9 +406,12 @@ static void map_draw(void)
         int cur = (s == s_cursor[PAGE_MAP]);
         const ModSlot *m = &g_patch.mod[s];
         field(s * 4 + 0, 4, y, 5, src_name[s], cur ? COL_SEL : COL_MID);
-        field(s * 4 + 1, 34, y, 13, dest_name[m->dest], cur && s_col == 0 ? COL_TITLE : COL_MID);
-        put_sdec(t, 0, m->depth, 2);
-        field(s * 4 + 2, 118, y, 3, t, cur && s_col == 1 ? COL_TITLE : COL_MID);
+        // A destination this cart's engine ignores is dimmed, and says so where the depth goes
+        // (except while the depth is being edited).
+        int na = !eng_supports(m->dest);
+        field(s * 4 + 1, 34, y, 13, dest_name[m->dest], cur && s_col == 0 ? COL_TITLE : na ? COL_DIM : COL_MID);
+        if (na && !(cur && s_col == 1)) put_str(t, 0, "N/A"); else put_sdec(t, 0, m->depth, 2);
+        field(s * 4 + 2, 118, y, 3, t, cur && s_col == 1 ? COL_TITLE : na ? COL_DIM : COL_MID);
         // The source's own level, and its trigger state.
         int32_t v;
         switch (s) {
@@ -415,11 +452,14 @@ static void btn_draw(void)
         const BtnSlot *b = &g_patch.btn[i];
         int edge = dest_is_edge(b->dest);
         field(i * 4 + 0, 4, y, 6, btn_name[i], cur ? COL_SEL : COL_MID);
-        field(i * 4 + 1, 46, y, 13, dest_name[b->dest], cur && s_col == 0 ? COL_TITLE : COL_MID);
+        int na = !eng_supports(b->dest);
+        field(i * 4 + 1, 46, y, 13, dest_name[b->dest], cur && s_col == 0 ? COL_TITLE : na ? COL_DIM : COL_MID);
         field(i * 4 + 2, 136, y, 5, edge ? "PRESS" : btn_mode_name[b->mode],
               cur && s_col == 1 ? COL_TITLE : edge ? COL_DIM : COL_MID);
-        if (edge) t[0] = 0; else put_sdec(t, 0, b->amount, 2);
-        field(i * 4 + 3, 172, y, 3, t, cur && s_col == 2 ? COL_TITLE : COL_MID);
+        if (na && !(cur && s_col == 2)) put_str(t, 0, "N/A");
+        else if (edge) t[0] = 0;
+        else put_sdec(t, 0, b->amount, 2);
+        field(i * 4 + 3, 172, y, 3, t, cur && s_col == 2 ? COL_TITLE : na ? COL_DIM : COL_MID);
         field(64 + i, 196, y, 1, (g_btn & btn_key[i]) && g_perform ? "*" : " ", COL_OK);
     }
     field(61, 4, SCREEN_H - 30, 38, "ACTIVE IN PERFORM MODE (SELECT ON PLAY)", COL_DIM);
@@ -446,8 +486,10 @@ static int s_baseTop;
 
 static void base_keys(uint16_t k)
 {
-    // LEFT/RIGHT step by 1, with or without A. Holding A turns UP/DOWN into steps of 10 instead of
-    // moving the cursor, and A+B (either order) zeros. A alone does nothing, so it is safe to hold.
+    // LEFT/RIGHT step by 1, with or without A. Holding A turns UP/DOWN into big steps instead of
+    // moving the cursor - 12 for TABLE OFFSET (one 12-byte instrument entry) and TRANSPOSE (an
+    // octave), 10 for the rest - and A+B (either order) zeros. A alone does nothing, so it is safe
+    // to hold.
     int *cur = &s_cursor[PAGE_BASE];
     int aHeld = (g_btn & KEY_A) != 0;
     if (!aHeld) {
@@ -458,7 +500,8 @@ static void base_keys(uint16_t k)
     int8_t *v = &g_patch.base[dest];
     if ((k & (KEY_A | KEY_B)) && (g_btn & (KEY_A | KEY_B)) == (KEY_A | KEY_B)) { *v = 0; return; }
     int d = (k & KEY_RIGHT) ? 1 : (k & KEY_LEFT) ? -1 : 0;
-    if (aHeld) d += (k & KEY_UP) ? 10 : (k & KEY_DOWN) ? -10 : 0;
+    int big = (dest == DEST_TABLE || dest == DEST_TRANS) ? 12 : 10;
+    if (aHeld) d += (k & KEY_UP) ? big : (k & KEY_DOWN) ? -big : 0;
     if (d) *v = (int8_t)step_clamp(*v, d, base_min(dest), base_max(dest));
 }
 
@@ -484,37 +527,41 @@ static void base_draw(void)
             put_dec(t, 0, (uint32_t)v, 1);
         }
         field(r * 3 + 1, 88, y, 8, t, sel ? COL_TITLE : v ? COL_MID : COL_DIM);
-        field(r * 3 + 2, 142, y, 9, s_baseUnit[row], COL_DIM);
+        if (eng_supports(dest)) field(r * 3 + 2, 142, y, 9, s_baseUnit[row], COL_DIM);
+        else { int a = put_str(t, 0, "N/A "); put_str(t, a, g_eng->name); field(r * 3 + 2, 142, y, 9, t, COL_WAIT); }
     }
     // Where the window is: more above, more below.
     field(59, 214, 16, 2, s_baseTop > 0 ? "^" : "", COL_DIM);
     field(58, 214, 16 + (BASE_VISIBLE - 1) * 11, 2, s_baseTop + BASE_VISIBLE < BASE_ROWS ? "v" : "", COL_DIM);
-    field(60, 4, SCREEN_H - 10, 38, "LEFT/RIGHT 1  A+UP/DOWN 10  A+B ZERO", COL_DIM);
+    field(60, 4, SCREEN_H - 10, 38, "LEFT/RIGHT 1  A+UP/DOWN 10/12  A+B ZERO", COL_DIM);
 }
 
 // ---- SET --------------------------------------------------------------------------------------
 
 #define SET_CLOCK   0
 #define SET_PPQN    1
-#define SET_TABLE   2
-#define SET_LIST    3
-#define SET_VOICES  4
-#define SET_GAIN    5
-#define SET_FOLLOW  6
-#define SET_REPEAT  7
-#define SET_BARLEN  8
-#define SET_RESTQ   9
-#define SET_SCRUB   10
-#define SET_SWUP    11
-#define SET_SWDN    12
-#define SET_CART    13
-#define SET_RESCAN  14
-#define SET_FACTORY 15
-#define SET_ITEMS   16
+#define SET_CLKOUT  2
+#define SET_OUT2    3
+#define SET_TABLE   4
+#define SET_LIST    5
+#define SET_VOICES  6
+#define SET_GAIN    7
+#define SET_FOLLOW  8
+#define SET_REPEAT  9
+#define SET_BARLEN  10
+#define SET_RESTQ   11
+#define SET_SCRUB   12
+#define SET_SWUP    13
+#define SET_SWDN    14
+#define SET_CART    15
+#define SET_RESCAN  16
+#define SET_FACTORY 17
+#define SET_ITEMS   18
 
 static const char *set_label[SET_ITEMS] = {
-    "CLOCK", "PPQN", "SONG TABLE", "SONG LIST", "VOICES", "GAIN", "CV FOLLOWS", "SONG END",
-    "RESTART BAR", "RESTARTS", "SCRUB LEN", "SWITCH UP", "SWITCH DOWN", "CART SPEED", "RESCAN CART", "FACTORY SET",
+    "CLOCK IN", "PPQN IN", "CLOCK OUT", "OUT 2", "SONG TABLE", "SONG LIST", "VOICES", "GAIN",
+    "CV FOLLOWS", "SONG END", "RESTART BAR", "RESTARTS", "SCRUB LEN", "SWITCH UP", "SWITCH DOWN",
+    "CART SPEED", "RESCAN CART", "FACTORY SET",
 };
 static const char *clk_name[3] = { "AUTO", "INTERNAL", "EXTERNAL" };
 
@@ -529,6 +576,8 @@ static void set_keys(uint16_t k)
     switch (*cur) {
     case SET_CLOCK:  p->clkMode    = (uint8_t)step_wrap(p->clkMode, d, 3); break;
     case SET_PPQN:   p->ppqnIx     = (uint8_t)step_clamp(p->ppqnIx, d, 0, CLK_PPQN_COUNT - 1); break;
+    case SET_CLKOUT: p->clkOutIx   = (uint8_t)step_clamp(p->clkOutIx, d, 0, CLK_PPQN_COUNT - 1); break;
+    case SET_OUT2:   p->out2Mode   = (uint8_t)step_wrap(p->out2Mode, d, OUT2_COUNT); break;
     case SET_TABLE:
         if (d && g_tableCount > 1) mod_set_list(step_wrap(g_tableIx, d, g_tableCount), g_listMode);
         break;
@@ -545,7 +594,10 @@ static void set_keys(uint16_t k)
     case SET_SWUP:   p->swUp       = (uint8_t)step_wrap(p->swUp, d, SWU_COUNT); break;
     case SET_SWDN:   p->swDown     = (uint8_t)step_wrap(p->swDown, d, SWD_COUNT); break;
     case SET_CART:   if (d) p->cartSafe ^= 1; break;
-    case SET_RESCAN: if ((k & KEY_A) && g_ui_rescan) { g_ui_rescan(); return; } break;
+    case SET_RESCAN:
+        if (d) g_ui_rescanFull ^= 1;
+        if ((k & KEY_A) && g_ui_rescan) { g_ui_rescan(); return; }
+        break;
     case SET_FACTORY:
         if (k & KEY_A) {
             if (s_confirm) { mod_default_patch(); s_confirm = 0; }
@@ -561,7 +613,7 @@ static void set_draw(void)
     char t[40];
     const Patch *p = &g_patch;
     for (int i = 0; i < SET_ITEMS; i++) {
-        int y = 14 + i * 9;                     // 16 rows: 9 px apart to fit
+        int y = 13 + i * 8;                     // 18 rows: 8 px apart to fit
         int cur = (i == s_cursor[PAGE_SET]);
         field(i * 2, 4, y, 12, set_label[i], cur ? COL_SEL : COL_DIM);
         int a = 0;
@@ -569,6 +621,8 @@ static void set_draw(void)
         switch (i) {
         case SET_CLOCK:  put_str(t, 0, clk_name[p->clkMode]); break;
         case SET_PPQN:   put_dec(t, 0, clk_ppqn[p->ppqnIx], 1); break;
+        case SET_CLKOUT: a = put_dec(t, 0, clk_ppqn[p->clkOutIx], 1); put_str(t, a, " PPQN, AUDIO OUT 1"); break;
+        case SET_OUT2:   put_str(t, 0, out2_name[p->out2Mode < OUT2_COUNT ? p->out2Mode : 0]); break;
         case SET_TABLE:
             a = put_dec(t, 0, (uint32_t)g_tableIx + 1, 1);
             a = put_str(t, a, " OF ");
@@ -594,7 +648,10 @@ static void set_draw(void)
         case SET_SWUP:   put_str(t, 0, swu_name[p->swUp]); break;
         case SET_SWDN:   put_str(t, 0, swd_name[p->swDown]); break;
         case SET_CART:   put_str(t, 0, p->cartSafe ? "SAFE 4/2" : "FAST 3/1"); break;
-        case SET_RESCAN: put_str(t, 0, cur ? "PRESS A" : ""); break;
+        case SET_RESCAN:
+            a = put_str(t, 0, g_ui_rescanFull ? "FULL: ALL ENGINES" : "FAST");
+            if (cur) put_str(t, a, g_ui_rescanFull ? "" : "  A GO");
+            break;
         case SET_FACTORY: put_str(t, 0, cur ? (s_confirm ? "A AGAIN TO RESET" : "PRESS A") : ""); break;
         }
         field(i * 2 + 1, 84, y, 18, t, cur ? COL_TITLE : COL_MID);
@@ -603,17 +660,31 @@ static void set_draw(void)
 
 // ---- MEM --------------------------------------------------------------------------------------
 
+// CLEAR: SELECT, then SELECT again. A slot is cleared by saving 0xFF over it: the host reads a slot
+// whose first two bytes are erased-flash 0xFF as empty (patch_store.cpp, slot_valid), so this needs
+// nothing new from the firmware, and its tag goes to 0 with it (no boot from a cleared slot).
+static uint8_t s_memClear;               // 1 = SELECT pressed once, 2 = the clear is being saved
 static void mem_keys(uint16_t k)
 {
+    if (k & (KEY_LEFT | KEY_RIGHT | KEY_UP | KEY_DOWN | KEY_A | KEY_B)) { if (s_memClear == 1) s_memClear = 0; }
     if (k & KEY_LEFT)  s_memSlot = (uint8_t)((s_memSlot + 15) & 15);
     if (k & KEY_RIGHT) s_memSlot = (uint8_t)((s_memSlot + 1) & 15);
     if (k & KEY_UP)    s_memSlot = (uint8_t)((s_memSlot + 12) & 15);
     if (k & KEY_DOWN)  s_memSlot = (uint8_t)((s_memSlot + 4) & 15);
     if (g_xferState != LINK_XFER_NONE) return;
-    if (k & KEY_A) link_begin_load(s_memSlot);
+    if (k & KEY_A) { s_memClear = 0; link_begin_load(s_memSlot); }
     if (k & KEY_B) {
+        s_memClear = 0;
         mod_patch_prepare_save();
         link_begin_save(s_memSlot, (const uint8_t *)&g_patch, (int)sizeof(Patch));
+    }
+    if ((k & KEY_SELECT) && ((g_slotMask >> s_memSlot) & 1)) {
+        if (s_memClear != 1) s_memClear = 1;
+        else {
+            static const uint8_t erased[GBA_PATCH_SLOT_BYTES] = { [0 ... GBA_PATCH_SLOT_BYTES - 1] = 0xFF };
+            s_memClear = 2;
+            link_begin_save(s_memSlot, erased, GBA_PATCH_SLOT_BYTES);
+        }
     }
 }
 
@@ -628,14 +699,15 @@ static void mem_draw(void)
         put_str(t, a, used ? " USED" : " ----");
         field(s, x, y, 8, t, s == s_memSlot ? COL_SEL : used ? COL_MID : COL_DIM);
     }
-    const char *st = "A LOAD   B SAVE";
+    const char *st = "A LOAD  B SAVE  SELECT CLEAR";
     uint16_t col = COL_DIM;
-    if (g_xferState == LINK_XFER_SAVE)      { st = "SAVING...";  col = COL_WAIT; }
+    if (s_memClear == 1)                    { st = "SELECT AGAIN TO CLEAR IT"; col = COL_WAIT; }
+    else if (g_xferState == LINK_XFER_SAVE) { st = s_memClear ? "CLEARING..." : "SAVING...";  col = COL_WAIT; }
     else if (g_xferState == LINK_XFER_LOAD) { st = "LOADING..."; col = COL_WAIT; }
-    else if (g_xferResult == LINK_RESULT_OK)    { st = "DONE";   col = COL_OK; }
+    else if (g_xferResult == LINK_RESULT_OK)    { st = s_memClear ? "CLEARED" : "DONE";   col = COL_OK; }
     else if (g_xferResult == LINK_RESULT_EMPTY) { st = "SLOT IS EMPTY"; col = COL_WAIT; }
     else if (g_xferResult == LINK_RESULT_BAD)   { st = "BAD DATA - NOT LOADED"; col = COL_FAIL; }
-    field(20, 8, 110, 24, st, col);
+    field(20, 8, 110, 28, st, col);
     bar(0, 8, 122, 224, 4, g_xferState != LINK_XFER_NONE ? (link_xfer_progress() * 224) / 100 : 0, COL_BAR);
     field(21, 8, 134, 37, "A PATCH IS THE MAPS, BASE + SETTINGS.", COL_DIM);
     field(22, 8, 144, 37, "SONG + MUTES RETURN ON THE SAME GAME.", COL_DIM);
@@ -662,6 +734,8 @@ static void mem_poll(void)
 
 static void engine_line(char *t);
 
+static uint8_t s_calRow;                  // Krawall's bank rows: 0 samples, 1 instruments
+
 static void cal_draw(void)
 {
     char t[40];
@@ -671,7 +745,9 @@ static void cal_draw(void)
     a = put_str(t, 0, "SCAN   ");
     a = put_str(t, a, meth[g_scan.method < 4 ? g_scan.method : 0]);
     a = put_str(t, a, "  TABLES ");
-    put_dec(t, a, g_tableCount, 1);
+    a = put_dec(t, a, g_tableCount, 1);
+    a = put_str(t, a, " ");
+    put_str(t, a, g_scan.method == SCAN_NONE ? "" : eng_by_id(g_scan.engine)->name);
     field(0, 4, y, 36, t, COL_MID); y += 10;
     if (g_scan.method == SCAN_NONE) {
         engine_line(t);                                 // what the cart uses instead
@@ -721,14 +797,42 @@ static void cal_draw(void)
     field(9, 4, y, 36, t, COL_MID); y += 10;
     a = put_str(t, 0, "VOICES ");
     int on = 0;
-    for (int i = 0; i < PL_DS_MAX; i++) if (g_ds[i].status & SF_ON) on++;
+    for (int i = 0; i < PL_DS_MAX; i++) {
+        if (g_eng->id == ENG_ID_MP2K) { if (g_ds[i].status & SF_ON) on++; }
+        else if (g_mix[i].active && !mixer_done(i)) on++;        // other engines: the mixer's own
+    }
     a = put_dec(t, a, (uint32_t)on, 1);
     a = put_str(t, a, "/");
     a = put_dec(t, a, g_plMaxChans, 1);
     a = put_str(t, a, " PSG ");
     for (int i = 0; i < PL_CGB; i++) t[a++] = (g_cgb[i].status & SF_ON) ? (char)('1' + i) : '-';
     t[a] = 0;
-    field(8, 4, y, 36, t, COL_MID);
+    field(8, 4, y, 36, t, COL_MID); y += 10;
+    // The engine playing, and what it reports (MusyX: unknown opcodes, warnings, a decoder stop;
+    // GAX: songs, what the first scan would have kept, FX banks, its commonest near miss).
+    eng_diag(t);
+    field(10, 4, y, 36, t, COL_MID); y += 10;
+    // Krawall's banks: which sample and instrument bank its modules use. UP/DOWN picks, LEFT/RIGHT
+    // steps through the candidates the scan found (the song list is rebuilt, playback stops).
+    int kr = g_eng->id == ENG_ID_KRAWALL;
+    for (int w = 0; w < 2; w++) {
+        if (kr) {
+            eng_kr_bank_text(w, t + 1);
+            t[0] = (w == s_calRow) ? '>' : ' ';
+        } else t[0] = 0;
+        field(11 + w, 4, y, 36, t, w == s_calRow ? COL_SEL : COL_MID); y += 10;
+    }
+}
+
+static void cal_keys(uint16_t k)
+{
+    if (g_eng->id != ENG_ID_KRAWALL) return;
+    if (k & (KEY_UP | KEY_DOWN)) s_calRow ^= 1;
+    int d = (k & KEY_RIGHT) ? 1 : (k & KEY_LEFT) ? -1 : 0;
+    if (d && eng_kr_bank_count(s_calRow) > 1) {
+        eng_kr_bank_step(s_calRow, d);
+        mod_set_list(g_tableIx, g_listMode);
+    }
 }
 
 // ---- the frame -------------------------------------------------------------------------------
@@ -737,6 +841,7 @@ void ui_init(void)
 {
     g_page = PAGE_PLAY;
     s_drawn = 0xFF;
+    s_cursor[PAGE_PLAY] = PLAY_SONG;      // A plays the cue straight away
 }
 
 void ui_frame(void)
@@ -756,6 +861,7 @@ void ui_frame(void)
         case PAGE_BASE: base_keys(k); break;
         case PAGE_SET:  set_keys(k);  break;
         case PAGE_MEM:  mem_keys(k);  break;
+        case PAGE_CAL:  cal_keys(k);  break;
         default: break;
         }
     }
@@ -771,7 +877,7 @@ void ui_frame(void)
     case PAGE_CAL:  cal_draw();  break;
     }
 
-    uint8_t flags = (uint8_t)((player_running() ? 1 : 0) | (g_clkExtLive ? 2 : 0) | (g_bypass ? 4 : 0)
+    uint8_t flags = (uint8_t)((g_eng->running() ? 1 : 0) | (g_clkExtLive ? 2 : 0) | (g_bypass ? 4 : 0)
                               | (g_perform ? 8 : 0));
     link_post_status(g_page, g_page == PAGE_PLAY ? GBA_MODE_PLAY : GBA_MODE_EDIT, flags);
 }
@@ -836,13 +942,14 @@ void ui_scan_result(int slot)
         text_centre(82, "INSERT A CART, THEN HOLD", COL_WAIT, 1);
         text_centre(94, "START+SELECT WHILE POWERING ON", COL_WAIT, 1);
     } else if (g_scan.method == SCAN_NONE) {
-        text_centre(82, "NO MP2K MUSIC FOUND", COL_FAIL, 1);
+        text_centre(82, "NO MUSIC FOUND THAT IT CAN PLAY", COL_FAIL, 1);
         engine_line(t);
         text_centre(94, t, g_engines ? COL_MID : COL_DIM, 1);
         if (g_engineInfo[0]) text_centre(106, g_engineInfo, COL_DIM, 1);
         text_centre(124, "PRESS A BUTTON", COL_WAIT, 1);
     } else {
         int a = put_dec(t, 0, g_songCount, 1);
+        if (g_scan.engine != ENG_ID_MP2K) { a = put_str(t, a, " "); a = put_str(t, a, eng_by_id(g_scan.engine)->name); }
         a = put_str(t, a, " SONGS FOUND");
         if (g_tableCount > 1) {
             a = put_str(t, a, " IN ");
@@ -850,6 +957,17 @@ void ui_scan_result(int slot)
             put_str(t, a, " TABLES");
         }
         text_centre(82, t, COL_OK, 1);
+        // Which engines: "MP2K + GAX". A cart's GAX text with no GAX table says why on the line below.
+        a = 0;
+        for (uint8_t e = 0; e < ENG_ID_COUNT; e++) {
+            int has = 0;
+            for (int i = 0; i < g_tableCount; i++) if (g_tables[i].engine == e) has = 1;
+            if (!has) continue;
+            if (a) a = put_str(t, a, " + ");
+            a = put_str(t, a, eng_by_id(e)->name);
+        }
+        t[a] = 0;
+        text_centre(118, t, COL_MID, 1);
         if (slot >= 0 && slot < GBA_PATCH_SLOTS) {
             a = put_str(t, 0, "FROM SAVED SLOT ");
             put_dec(t, a, (uint32_t)slot + 1, 1);

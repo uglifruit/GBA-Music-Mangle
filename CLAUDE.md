@@ -34,6 +34,35 @@ an assistant.
   likely on other engines (GAX, Krawall, ...). The engine sniff (below) will say which, if their
   engine leaves a signature.
 
+- **Other engines:** Krawall, GAX and MusyX players came from branches `codex/krawall-poc`,
+  `codex/gax-poc`, `codex/musyx-poc` (stacked; `engines/<name>/`). Design and "as built":
+  `docs/ENGINES.md`. **MusyX is in the main build (2026-10-29)** behind `payload/engine.c` (`g_eng`);
+  its trial played Lady Sia correctly on hardware the same day. **GAX and Krawall joined on
+  2026-11-01** (universal build; the GAX trial played but found only two short tunes on Finding
+  Nemo, so discovery was relaxed to gaxtapper's rules, with near-miss counts on CAL). Andy reported the
+  universal build "working well" on hardware the same day (no per-engine detail yet; Nemo's CAL
+  row is still to be read). Rules:
+  - mod.c, clock.c, ui.c, pcplay call `g_eng->`, never `player_*` (MP2K's entry is a thin wrapper).
+  - The view is the `g_pl*` transport globals and `g_tracks` lanes, filled by whichever engine
+    plays; MP2K keeps its section code in player.c, the others share engine.c's copy. Keep the two
+    in the same order.
+  - A bar snapshot restores only sequence state; anything live (mods, voices) stays current.
+  - The engine sources are LISTED in `payload/build.sh` and `tools/pcplay/build.sh` (engines/ also
+    holds host mains and trial mains that must not be linked).
+  - Check MP2K is untouched with byte-identical pcplay WAVs before and after an engine change, and
+    run `modtest test.gba msdemo.gba eng/gax.gba eng/krawall.gba eng/mixed.gba` (make_demo.py's
+    and mkengines.py's carts) for the other engines' checks.
+  - Each non-MP2K engine is an `EngCore` (eng_core.h) on the shared transport in engine.c; its glue
+    is `payload/eng_<name>.c` (built by the payload/*.c glob), its core is in engines/ (listed).
+  - Engine glue must not touch `g_patch` (pcplay links no mod.c): Krawall's bank choice is
+    `g_krBankWant`, copied to/from the patch by mod.c.
+  - **`-Os` breaks the build** (constant divides become `__aeabi_*`): engines stay `-O2`.
+- **Song kinds (2026-11-01):** `g_songKind[]` (scan.h KIND_*) replaces MP2K's player number as the
+  LIST filter: looping = MUSIC, short (< 384 ticks) and ending = SFX, long and ending = JINGLE; MP2K
+  also calls a short loop on a player ≠ 0 an SFX (mktestrom's PSG effect). `player_song_shape()`
+  (player.c) walks track 1; `tools/m4a_scan.py` mirrors it. scan.c caches the table's whole list
+  with kinds (`build_all`), `scan_forget()` drops it. SFX and JINGLE set `g_plOnce`.
+
 ## OPEN RISKS, in the order the first hardware session should settle them
 
 1. ~~Multiboot with a cart inserted needs START+SELECT held at power-on.~~ **Settled 2026-10-26:
@@ -153,7 +182,8 @@ an assistant.
 - **PERFORM mode turns off auto-repeat.** A held button is a HOLD, and a repeat would turn one STEP
   press into a stream. `modtest` checks this.
 - `tools/pcplay/modtest` drives `mod_update()` with stubbed link inputs and simulated keys
-  (`g_hostIo[0x130]`, active low). 98 checks, all passing 2026-10-27. Run it after touching
+  (`g_hostIo[0x130]`, active low). 183 checks with all the engine carts, all passing 2026-11-01. Its `play(n)` helper cues
+  and PLAYs: since v6 a select alone starts nothing. Run it after touching
   `mod.c`.
 
 - The FM card's division of labour: raw inputs arrive, and all meaning is in `g_patch.mod[]`.
@@ -164,7 +194,8 @@ an assistant.
 - Transpose is 1V/oct at **depth 63**: a semitone is 1792 in v×depth units.
 - The follower drops the gate for 3 ms on a new note while the gate is high, so legato notes
   retrigger downstream envelopes.
-- **Patch magic `'MP'` (0x4D50), `PATCH_VERSION 5`.** The FM card's rules apply: bump the version
+- **Patch magic `'MP'` (0x4D50), `PATCH_VERSION 8`** (v7 appended `tableEngine[8]`, v8 Krawall's
+  banks; 228 bytes). The FM card's rules apply: bump the version
   for any change of layout *or* meaning, and prefer appending + migrating. v2 APPENDED table, list,
   BASE and BTN; `mod_patch_accept()` migrates a zero-padded v1 by giving it the factory buttons.
   **v3 (2026-10-27) added ten destinations.** BASE couldn't grow in place (BTN follows it), so v2's
@@ -189,6 +220,10 @@ an assistant.
   `clock_reset()` in mod.c, as RESET is. The section length is `Patch.barLenIx` (v5, in what was
   padding; older patches get one bar). The bar counter `s_barPos` is used instead of `g_plTicks %`
   because `g_plBarTicks` is a variable (tripwire). The fuzz test fires both at random.
+  **The restore must re-apply anything live that a Track holds**: the copy carries the transpose
+  (`keyShiftX`/`pitX`) from when the bar began, and `player_update()` only pushes `g_mods.pitch`
+  on a change, so a transpose made mid-bar was undone by every REPEAT BAR pass (hardware report
+  2026-10-29, fixed the same day). Voice shift and table offset are read at note-on, so are safe.
 - **Every value destination is BIP now** (2026-10-27): the one-sided ones got meanings below zero.
   START → END (`sampleEnd`, a tail cut), LAYERS → from the bottom, SOLO → MUTE one track,
   REVERSE → DROP (`dropChance`), CRUSH + rate only / − bits only (it used to be both on +),
@@ -197,6 +232,29 @@ an assistant.
 - **Switch UP = REPEAT BAR** (`SWU_REPEAT`, the factory setting since 2026-10-27; BYPASS before):
   mod sets `g_plHoldBar` while up, and `player_tick()` restores the section's copy on every line
   that ends it, so the section playing loops. Older patches keep their own SWITCH UP.
+- **Cue, then PLAY (patch v6, 2026-10-29, Andy asked):** `g_song` is the CUE; `g_songPlaying` is
+  what plays (-1 stopped). `mod_song_select`/`mod_song_step` (L/R, NEXT, SONG CV, a BTN STEP on
+  SONG, the boot, a patch's scene) only cue. `DEST_PLAY` (30) starts the cue, `DEST_STOP` (31)
+  stops, RESET restarts what plays (or plays the cue when stopped). Factory: AU1 and switch down
+  (`SWD_PLAY`) are PLAY. The boot is silent until PLAY; the PLAY page's cursor starts on the SONG
+  row (rows: LIST, SONG, tracks), so A plays. A list or table change stops and cues item 1.
+  With AT BAR END, PLAY queues (`player_queue_start`, `s_pendingSong` in mod.c resolves
+  `g_songPlaying` once the line has passed) only while MUSIC plays: from stopped or over an effect
+  it is immediate, because a stopped player never reaches a line. v6 has no new fields.
+- **The outputs (v6, 2026-10-29):** Audio Out 1 is a CLOCK OUT (`Patch.clkOutIx`, factory 4 PPQN),
+  Audio Out 2 LOOP or SONG START (`Patch.out2Mode`); both in what was padding. They are still the
+  GBA_UP_PULSE counters: `g_plClockOut` steps every `g_plOutTicks` sequencer ticks (so it follows
+  EXT or INT, tempo mangles included), with its phase reset in `player_start()` and NOT by
+  RESTART BAR/LOOP; `g_plStarts` counts `player_start()`s. The host now caps each pulse at half
+  the time since the counter's last step (min 0.5 ms), or 24 PPQN at x4 tempo merged into a held
+  high. Silent while stopped. The old "beat" output was `g_plBeats` (still kept, unused by the link).
+- **BASE A+UP/DOWN steps 12 on TABLE OFFSET and TRANSPOSE** (an instrument entry, an octave), 10 on
+  the rest. **MEM: SELECT twice clears a slot** by saving 256 bytes of 0xFF: the host's
+  `slot_valid()` reads a 0xFFFF start as empty, so no firmware change was needed.
+- **An effect plays once** (`g_plOnce`, set from `g_songPlayer[n] != 0` in `start_song`): a
+  backward GOTO or an endless REPT ends its track, and SONG END = REPEAT is ignored. Andy's model:
+  with the SFX list chosen, music isn't expected to be playing, so effects use the one player
+  (no layering). modtest's 8g checks it on mktestrom's looping PSG effect.
 - **SET > RESTARTS = AT BAR END** (`Patch.restartQ`, v5, padding before): RESET, RESTART LOOP and
   RESTART BAR (and switch-down RESET) go to `player_queue_restart()`, and `player_tick()` does
   them at the top of the first tick on the next section line (`s_barPos == 0`), with no
@@ -255,7 +313,7 @@ an assistant.
 
 ## Payload facts
 
-- 62.6 KB, about 9.5 s to upload. IWRAM holds about 11 KB: the DMA handlers, the dispatcher,
+- 114 KB with all four engines, about 17.3 s to upload (65.9 KB / 10 s with MP2K alone). IWRAM holds about 11 KB: the DMA handlers, the dispatcher,
   `mixer_render`, the scan loop, the drawing primitives, `mod_update`, `clock_service`,
   `player_update`, the rings, the echo line and the accumulators.
 - **Drawing speed (2026-10-27, FM's `SPEEDUPSCREEN.md`):** `rect`/`line`/`glyph`/`text` are FM's

@@ -16,11 +16,17 @@ uint16_t g_plTempoD = 150;
 uint8_t g_plMaxChans = 8;
 uint16_t g_plGameRate = 13379;
 uint8_t g_plRepeat = 1;
+uint8_t g_plOnce;
+uint8_t g_plOutTicks = 6;
+uint8_t g_plClockOut, g_plStarts;
+static uint8_t s_outPos;                  // ticks into the current clock-out period
 uint16_t g_plBarTicks = 96;
 uint8_t g_plQueued;
 uint8_t g_plHoldBar;
 
 static uint32_t s_entry, s_tone, s_rng = 0x6D2B79F5u;
+static uint32_t s_queuedEntry;           // player_queue_start's song, 0 = restart s_entry
+static uint8_t  s_queuedOnce;
 static uint8_t s_priority;
 static int16_t s_pitch;
 static uint16_t s_mute;
@@ -157,7 +163,15 @@ void player_restart_loop(void)
     s_barPos    = 0;
 }
 
-void player_queue_restart(uint8_t what) { if (g_plHeader) g_plQueued = what; }
+void player_queue_restart(uint8_t what) { if (g_plHeader) { g_plQueued = what; s_queuedEntry = 0; } }
+
+void player_queue_start(uint32_t songEntry, uint8_t once)
+{
+    if (!g_plHeader) return;
+    g_plQueued = PL_RESTART_SONG;
+    s_queuedEntry = songEntry;
+    s_queuedOnce = once;
+}
 
 void player_restart_bar(void)
 {
@@ -170,6 +184,9 @@ void player_restart_bar(void)
         uint8_t act = t->act, lastKey = t->lastKey;
         copy_bytes(t, &s_snap[n], sizeof(Track));
         t->notes = notes; t->act = act; t->lastKey = lastKey; t->gate = 0;
+        // Nor is the transpose: the copy holds the one in force when the bar began, and
+        // player_update() only re-applies it when g_mods.pitch changes.
+        t->keyShiftX = g_mods.pitch >> 8; t->pitX = g_mods.pitch & 255;
         if (t->flags & MPT_FLG_EXIST) t->flags |= MPT_FLG_VOLCHG | MPT_FLG_PITCHG;
     }
     g_plTicks  = s_snapTicks;
@@ -460,6 +477,69 @@ static uint32_t find_loop(uint32_t a)
     return 0;
 }
 
+// A song's shape (player.h): find_loop's walk over the first track, adding up its waits, and
+// following patterns (PATT .. PEND, as deep as the player goes) so their waits count. Ends at FINE
+// (0: it stops) or the first backward GOTO (1: it loops); anything it cannot follow is -1.
+int player_song_shape(uint32_t songEntry, uint32_t *ticks)
+{
+    int tc;
+    *ticks = 0;
+    if (!rom_ok(songEntry, SONG_ENTRY_SIZE)) return -1;
+    uint32_t hdr = rom_u32(songEntry);
+    if (!scan_header_ok(hdr, &tc) || tc < 1) return -1;
+    uint32_t a = rom_u32(SH_PART(hdr, 0)), stack[3], t = 0;
+    unsigned last = 0, depth = 0;
+    for (int n = 0; n < 8192; n++) {
+        if (!rom_ok(a, 8)) return -1;
+        unsigned c = rom_u8(a);
+        if (c < 128) {
+            if (last < CMD_VOICE) return -1;
+            c = last;                                     // running status: this byte is an arg
+        } else {
+            ++a;
+            if (c >= CMD_VOICE) last = c;
+        }
+        if (c >= CMD_TIE) {                               // note: key, velocity, gate extension
+            for (int k = 0; k < 3 && rom_u8(a) < 128; k++) ++a;
+            continue;
+        }
+        if (c <= 0xB0) { t += gClockTable[c - CMD_WAIT0]; *ticks = t; continue; }
+        switch (c) {
+        case CMD_FINE: return 0;
+        case CMD_GOTO: {
+            uint32_t d = rom_u32(a);
+            if (d < a) return rom_ok(d, 1) ? 1 : -1;      // backward: the loop
+            a = d;
+            break;
+        }
+        case CMD_PATT:
+            if (depth >= 3) return -1;
+            stack[depth++] = a + 4;
+            a = rom_u32(a);
+            break;
+        case CMD_PEND:   if (depth) a = stack[--depth]; break;
+        case CMD_REPT:   a += 5; break;
+        case CMD_MEMACC: { unsigned op = rom_u8(a); a += 3; if (op >= 6 && op <= 17) a += 4; break; }
+        case CMD_PORT:   a += 2; break;
+        case CMD_EOT:    if (rom_u8(a) < 128) ++a; break;
+        case CMD_XCMD: {
+            unsigned sub = rom_u8(a++);
+            if (sub == 0 || sub == 3 || sub > 13) return -1;
+            a += (sub == 1 || sub == 13) ? 4 : (sub == 12) ? 2 : 1;
+            break;
+        }
+        case CMD_PRIO: case CMD_TEMPO: case CMD_KEYSH: case CMD_VOICE: case CMD_VOL: case CMD_PAN:
+        case CMD_BEND: case CMD_BENDR: case CMD_LFOS: case CMD_LFODL: case CMD_MOD: case CMD_MODT:
+        case CMD_TUNE:
+            ++a;
+            break;
+        default:
+            return -1;
+        }
+    }
+    return -1;
+}
+
 int player_start(uint32_t songEntry)
 {
     int tc;
@@ -478,6 +558,9 @@ int player_start(uint32_t songEntry)
     s_snapValid = 0;
     s_barPos    = 0;
     g_plQueued  = 0;
+    s_queuedEntry = 0;
+    s_outPos = 0;                           // the clock out restarts with the song: tick 0 pulses
+    ++g_plStarts;
     s_entry = songEntry;
     if (!g_mods.chaosFree) s_chaosRng = s_chaosSeed;
     s_tone = rom_u32(SH_TONE(hdr)); s_priority = rom_u8(SH_PRIORITY(hdr));
@@ -790,6 +873,15 @@ static void jump_track(Track *t, uint32_t from, int count_loop)
 }
 
 // MPlayMain command dispatcher / ply_* (m4a_1.s).
+// PLAY ONCE: a GOTO or an endless REPT that jumps back is the track's loop, and an effect does not
+// loop - the track ends there. (PATT and a counted REPT jump back too, but they are not loops.)
+static int once_ends(int n, uint32_t from)
+{
+    if (!g_plOnce || rom_u32(g_tracks[n].cmd) > from) return 0;
+    track_stop(n);
+    return 1;
+}
+
 static void command(int n, unsigned cmd, uint32_t from, int leader)
 {
     Track *t = &g_tracks[n];
@@ -797,7 +889,7 @@ static void command(int n, unsigned cmd, uint32_t from, int leader)
     if (cmd <= 0xB0) { t->wait = gClockTable[cmd - CMD_WAIT0]; return; }
     switch (cmd) {
     case CMD_FINE: track_stop(n); break;
-    case CMD_GOTO: jump_track(t, from, leader); break;
+    case CMD_GOTO: if (!once_ends(n, from)) jump_track(t, from, leader); break;
     case CMD_PATT:
         if (t->patternLevel >= 3) track_stop(n);
         else { t->stack[t->patternLevel++] = t->cmd + 4; jump_track(t, from, 0); }
@@ -805,7 +897,7 @@ static void command(int n, unsigned cmd, uint32_t from, int leader)
     case CMD_PEND: if (t->patternLevel) t->cmd = t->stack[--t->patternLevel]; break;
     case CMD_REPT: {
         unsigned count = rom_u8(t->cmd++);
-        if (!count) jump_track(t, from, leader);
+        if (!count) { if (!once_ends(n, from)) jump_track(t, from, leader); }
         else if (++t->repN < count) jump_track(t, from, 0);
         else { t->repN = 0; t->cmd += 4; }
         break;
@@ -862,7 +954,10 @@ void player_tick(void)
     if (g_plQueued && s_barPos == 0) {
         uint8_t q = g_plQueued;
         g_plQueued = 0;
-        if (q == PL_RESTART_SONG)      player_start(s_entry);
+        if (q == PL_RESTART_SONG) {
+            if (s_queuedEntry) { g_plOnce = s_queuedOnce; player_start(s_queuedEntry); }
+            else player_start(s_entry);
+        }
         else if (q == PL_RESTART_LOOP) player_restart_loop();
         else                           player_restart_bar();
     }
@@ -872,11 +967,14 @@ void player_tick(void)
     int leader = -1;
     for (int n = 0; n < PL_TRACKS; ++n) if (g_tracks[n].flags & MPT_FLG_EXIST) { leader = n; break; }
     if (leader < 0) {
-        if (!g_plRepeat) { player_stop(); return; }
+        if (!g_plRepeat || g_plOnce) { player_stop(); return; }
         if (!player_start(s_entry)) { player_stop(); return; }
         ++g_plLoops; leader = 0;
     }
     if (g_plTicks % 24 == 0) ++g_plBeats;
+    if (s_outPos >= g_plOutTicks) s_outPos = 0;          // CLOCK OUT just changed to a shorter period
+    if (s_outPos == 0) ++g_plClockOut;
+    if (++s_outPos >= g_plOutTicks) s_outPos = 0;
     // A section line: keep a copy of the song's state as it stands before this tick.
     if (s_barPos == 0) {
         copy_bytes(s_snap, g_tracks, sizeof(g_tracks));

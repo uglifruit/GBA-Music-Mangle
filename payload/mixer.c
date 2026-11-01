@@ -111,10 +111,13 @@ IWRAM_CODE void mixer_render(int8_t *outL, int8_t *outR)
         uint32_t step = m->step;
         uint32_t endQ = m->endQ;
         uint32_t loopQ = m->loopQ;
+        // Unsigned samples: a sign-extended byte XOR -128 is exactly (uint8_t)byte - 128, and XOR 0
+        // leaves a signed one as it is - one EOR per fetch, no second renderer.
+        int32_t  sx = (m->flags & MIX_F_UNSIGNED) ? -128 : 0;
 
         if (m->flags & MIX_F_REVERSE) {
             for (int i = 0; i < AUDIO_BLOCK; i++) {
-                int32_t s = d[pos >> 12];
+                int32_t s = d[pos >> 12] ^ sx;
                 aL[i] += s * vl;
                 aR[i] += s * vr;
                 pos -= (int32_t)step;
@@ -144,8 +147,8 @@ IWRAM_CODE void mixer_render(int8_t *outL, int8_t *outR)
         uint32_t u = (uint32_t)pos;
         for (int i = 0; i < AUDIO_BLOCK; i++) {
             uint32_t ix = u >> 12;
-            int32_t a = d[ix];
-            int32_t b = d[ix + 1];
+            int32_t a = d[ix] ^ sx;
+            int32_t b = d[ix + 1] ^ sx;
             int32_t s = a + (((b - a) * (int32_t)((u >> 4) & 0xFFu)) >> 8);
             aL[i] += s * vl;
             aR[i] += s * vr;

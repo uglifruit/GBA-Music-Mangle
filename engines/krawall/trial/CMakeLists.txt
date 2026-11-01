@@ -1,0 +1,21 @@
+cmake_minimum_required(VERSION 3.13)
+set(PICO_BOARD pico CACHE STRING "Board type")
+get_filename_component(REPO "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+include("${REPO}/pico_sdk_import.cmake")
+project(krawall_trial C CXX ASM)
+set(CMAKE_CXX_STANDARD 17)
+pico_sdk_init()
+# The original main.cpp remains untouched. Only its build-directory copy sees the trial header.
+configure_file("${REPO}/main.cpp" "${CMAKE_CURRENT_BINARY_DIR}/main.cpp" COPYONLY)
+configure_file("${TRIAL_PAYLOAD_HEADER}" "${CMAKE_CURRENT_BINARY_DIR}/gba_payload.h" COPYONLY)
+add_executable(krawall_trial "${CMAKE_CURRENT_BINARY_DIR}/main.cpp"
+    "${REPO}/gba_multiboot.cpp" "${REPO}/gba_link.cpp" "${REPO}/patch_store.cpp")
+pico_generate_pio_header(krawall_trial "${REPO}/gba_spi.pio")
+target_include_directories(krawall_trial PRIVATE "${REPO}")
+target_link_libraries(krawall_trial pico_unique_id pico_stdlib hardware_dma hardware_i2c
+    hardware_pwm hardware_adc hardware_spi hardware_pio hardware_flash pico_flash pico_multicore)
+pico_add_extra_outputs(krawall_trial)
+target_compile_definitions(krawall_trial PRIVATE PICO_XOSC_STARTUP_DELAY_MULTIPLIER=64)
+pico_enable_stdio_usb(krawall_trial 0)
+target_compile_options(krawall_trial PRIVATE -Wall -Wextra)
+target_link_options(krawall_trial PRIVATE -Wl,--print-memory-usage)

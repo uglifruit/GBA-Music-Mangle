@@ -35,6 +35,7 @@ void ui_mem_select(int slot);         // put the MEM page's cursor on a slot
 
 // SET page's RESCAN CART calls this; main.c owns the scan flow and sets it.
 extern void (*g_ui_rescan)(void);
+extern uint8_t g_ui_rescanFull;          // SET > RESCAN CART's choice: 1 = look for every engine
 
 // SERVICE LOAD for the CAL page (main.c): the modulator + clock service, percent x 16 of ~1 ms.
 extern volatile uint16_t g_svcAvg, g_svcPeak;

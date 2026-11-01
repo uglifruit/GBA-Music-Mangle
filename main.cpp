@@ -22,13 +22,13 @@
 // GBA RAM, not a protocol change and not a firmware rebuild.
 //
 // Panel (what each input MEANS is decided on the GBA - see payload/mod.h; this is the factory map):
-//   Pulse In 2   clock (PPQN on the GBA)   Audio In 1   reset        Audio In 2   sample start
+//   Pulse In 2   clock (PPQN on the GBA)   Audio In 1   play         Audio In 2   restart bar
 //   CV In 1      voice shift               CV In 2      transpose, 1V/oct
-//   Main knob    layers (track muting)     Knob X       tempo        Knob Y       ROM scrub
+//   Main knob    chaos                     Knob X       tempo        Knob Y       ROM scrub
 //   CV Out 2     followed track's pitch, calibrated 1V/oct
 //   CV Out 1     followed track's gate, 5 V
-//   Audio Out 1  beat pulse (one per quarter note of the song)
-//   Audio Out 2  loop pulse (each time the song loops)
+//   Audio Out 1  clock out (PPQN on the GBA), from the song's own ticks
+//   Audio Out 2  loop pulse, or song-start pulse (SET > OUT 2 on the GBA)
 //
 // Architecture: ComputerCard's 48 kHz audio/CV loop runs on core 0 (ProcessSample below). The
 // entire GBA link engine runs on core 1 (gba_link_core1) and communicates only through the
@@ -135,8 +135,10 @@ public:
         // The GBA sends COUNTERS; one pulse per increment. A jump of more than 4 is a resync (the
         // link just came up, or a song change reset the count), not a burst of real beats, so it
         // is absorbed silently. A pulse that lands while one is still high simply extends it.
-        PulseFromCounter(gGba.beatCount, lastBeat_, beatPulse_);
-        PulseFromCounter(gGba.loopCount, lastLoop_, loopPulse_);
+        if (beatSince_ < 0xFFFFu) beatSince_++;
+        if (loopSince_ < 0xFFFFu) loopSince_++;
+        PulseFromCounter(gGba.beatCount, lastBeat_, beatPulse_, beatSince_);
+        PulseFromCounter(gGba.loopCount, lastLoop_, loopPulse_, loopSince_);
         AudioOut1(beatPulse_ ? 2000 : 0);
         AudioOut2(loopPulse_ ? 2000 : 0);
         if (beatPulse_) beatPulse_--;
@@ -187,17 +189,25 @@ private:
     static constexpr uint32_t kPulse = 240;           // 5 ms at 48 kHz
     static constexpr uint32_t kFlash = 2400;          // 50 ms
 
-    static void PulseFromCounter(uint8_t now, uint8_t &last, uint32_t &pulse)
+    // A counter step is a pulse. Audio Out 1 is a clock now, up to 24 PPQN at x4 tempo (over
+    // 200 Hz), where 5 ms pulses would run into one long high: a pulse is never longer than half
+    // the time since the last step (and never shorter than 0.5 ms).
+    static void PulseFromCounter(uint8_t now, uint8_t &last, uint32_t &pulse, uint32_t &since)
     {
         uint8_t d = (uint8_t)(now - last);
         if (d == 0) return;
         last = now;
-        if (d <= 4) pulse = kPulse;
+        if (d <= 4) {
+            uint32_t half = since >> 1;
+            pulse = half >= kPulse ? kPulse : half < 24 ? 24 : half;
+        }
+        since = 0;
     }
 
     uint32_t tick_ = 0;
     uint8_t  lastBeat_ = 0, lastLoop_ = 0;
     uint32_t beatPulse_ = 0, loopPulse_ = 0;
+    uint32_t beatSince_ = 0xFFFFu, loopSince_ = 0xFFFFu;   // samples since each counter's last step
     uint32_t beatFlash_ = 0, loopFlash_ = 0;
 };
 

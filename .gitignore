@@ -17,3 +17,6 @@ Thumbs.db
 # Python
 __pycache__/
 *.pyc
+
+# Windows debug databases (zig cc test builds)
+*.pdb

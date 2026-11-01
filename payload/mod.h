@@ -6,7 +6,10 @@
 //   MAP   one mapping per Workshop source (CV, audio, pulse, knobs): a destination and a depth.
 //   BTN   in PERFORM mode (SELECT on the PLAY page) the GBA's buttons are sources too: each one
 //         HOLDs a destination up while pressed, LATCHes it on and off, STEPs its BASE value, or -
-//         for the edge destinations - fires a clock, a reset, or the next song.
+//         for the edge destinations - fires a clock, a reset, PLAY, STOP...
+//
+// Songs are CUED, then PLAYED (2026-10-29): choosing a song (L/R, NEXT, SONG CV, a STEP on SONG)
+// only moves the cue; PLAY starts it. An effect (a song on music player 1-3) plays once.
 //   BASE  every destination's resting value, set on the GBA in that destination's own units
 //         (programs, semitones, bytes, tracks...). With nothing patched, this is how the GBA alone
 //         mangles a song.
@@ -18,13 +21,14 @@
 //   BIP   both directions act around zero
 //
 // The factory map (performance-first, 2026-10-27):
-//   PU2  -> CLOCK          AU1 -> RESET           AU2 -> RESTART BAR (beat-repeat from a divider)
+//   PU2  -> CLOCK          AU1 -> PLAY            AU2 -> RESTART BAR (beat-repeat from a divider)
 //   CV1  -> VOICE SHIFT    CV2 -> TRANSPOSE (1V/oct)
 //   MAIN -> CHAOS          X   -> TEMPO           Y   -> ROM SCRUB
 // The factory buttons (PERFORM mode):
 //   A RESTART BAR   B REROLL CHAOS   L hold REVERSE   R hold CRUSH   UP/DOWN step TRANSPOSE
 //   LEFT CLEAR MANGLES   RIGHT step CHAOS (+32 each press)
-// Switch: UP repeats the bar (the section playing loops), DOWN (momentary) restarts the song.
+// Switch: UP repeats the bar (the section playing loops), DOWN (momentary) plays the cued song.
+// Outputs: Audio Out 1 a clock at 4 PPQN, Audio Out 2 a pulse each time the song loops.
 #pragma once
 
 #include <stdint.h>
@@ -44,9 +48,10 @@ extern const char *src_name[SRC_COUNT];
 // ---- destinations ----
 #define DEST_NONE     0
 #define DEST_CLOCK    1    // EDGE: one clock pulse (PPQN on the SET page)
-#define DEST_RESET    2    // EDGE: restart the song, aligned to the clock
-#define DEST_NEXT     3    // EDGE: next song
-#define DEST_SONG     4    // BIP:  pick a song up to 16 either side of the selected one
+#define DEST_RESET    2    // EDGE: restart the song playing, aligned to the clock (stopped: PLAY)
+#define DEST_NEXT     3    // EDGE: cue the next song (PLAY plays it)
+#define DEST_SONG     4    // BIP:  cue a song up to 16 either side of the chosen one; a button
+                           //       STEP moves the cue itself
 #define DEST_VSHIFT   5    // BIP:  voice shift, +-64 programs
 #define DEST_TABLE    6    // BIP:  voice-table pointer offset, +-2048 bytes
 #define DEST_START    7    // POS:  sample start point, 0..255/256 of the sample
@@ -76,7 +81,10 @@ extern const char *src_name[SRC_COUNT];
 #define DEST_REROLL  27    // EDGE: a new CHAOS pattern
 #define DEST_RLOOP   28    // EDGE: RESTART LOOP - every track to its loop point (skips the intro)
 #define DEST_RBAR    29    // EDGE: RESTART BAR - back to the last section line (SET > RESTART BAR)
-#define DEST_COUNT   30
+// ---- added 2026-10-29 (patch v6) ----
+#define DEST_PLAY    30    // EDGE: play the cued song from its start (the one playing: a restart)
+#define DEST_STOP    31    // EDGE: stop
+#define DEST_COUNT   32
 #define DEST_COUNT_V2 16   // the destinations a v1/v2 patch knew
 #define DEST_COUNT_V3 26   // ... and a v3/v4 patch
 #define DEST_MAX     48    // room in Patch.base[] (v5): destinations can be added up to here
@@ -118,10 +126,18 @@ typedef struct {
 #define SWU_COUNT  4
 #define SWD_NONE   0
 #define SWD_RESET  1       // DOWN: restart the song
-#define SWD_NEXT   2       // DOWN: next song
-#define SWD_COUNT  3
+#define SWD_NEXT   2       // DOWN: cue the next song
+#define SWD_PLAY   3       // DOWN: play the cued song (the factory setting since v6)
+#define SWD_COUNT  4
 extern const char *swu_name[SWU_COUNT];
 extern const char *swd_name[SWD_COUNT];
+
+// Audio Out 1 is a clock (SET > CLOCK OUT, at a PPQN). Audio Out 2 (SET > OUT 2):
+#define OUT2_LOOP  0       // a pulse each time the song loops
+#define OUT2_START 1       // a pulse each time a song starts from the top: a reset for a sequencer
+#define OUT2_COUNT 2
+extern const char *out2_name[OUT2_COUNT];
+#define CLK_OUT_DEFAULT 2  // 4 PPQN
 
 #define SCRUB_LEN_COUNT 7
 extern const uint32_t scrub_len[SCRUB_LEN_COUNT];
@@ -146,8 +162,15 @@ extern const char *bar_len_name[BAR_LEN_COUNT];
 //   v5  CHAOS and REROLL. BASE could not grow in place a second time - cartTag follows it, at an
 //       offset the host reads - so v3/v4's array is left as baseV3 and base[DEST_MAX] is APPENDED,
 //       with room for more. mod_patch_accept() copies baseV2 or baseV3 across.
+//   v6  new MEANINGS: PLAY and STOP; songs are cued, not played, by NEXT, SONG and the scene's
+//       song; switch down can PLAY. And the outputs: clkOutIx and out2Mode, in what was padding
+//       (a v5 slot gets 4 PPQN and LOOP).
+//   v7  other engines: each saved table's engine (ENG_ID_*) is APPENDED, so a slot saved on a MusyX
+//       cart boots without the scan too. A v6 slot's tables are all MP2K (zeros).
+//   v8  GAX and Krawall (2026-11-01). Krawall's bank choice is APPENDED (0 = the largest), and the
+//       LIST filters mean song/effect by content now, not MP2K's music player.
 #define PATCH_MAGIC   0x4D50u
-#define PATCH_VERSION 5
+#define PATCH_VERSION 8
 #define PATCH_TABLES  8            // = SCAN_MAX_TABLES (mod.c asserts it)
 
 typedef struct {
@@ -165,10 +188,10 @@ typedef struct {
     uint8_t  cartSafe;         // 1 = 4/2 wait states
     uint8_t  barLenIx;         // v5: RESTART BAR's section, index into bar_len (was padding)
     uint8_t  restartQ;         // v5: 1 = restarts wait for the section line (was padding)
-    uint8_t  pad[1];
+    uint8_t  clkOutIx;         // v6: Audio Out 1's clock, index into clk_ppqn (was padding)
     // The scene: restored only on the same game (matching code).
     char     game[4];
-    uint16_t song;             // playable-song index
+    uint16_t song;             // playable-song index (cued on load, since v6)
     uint16_t mute;             // the PLAY page's mutes
     // ---- v2 ---- (keep appending; nothing above may move)
     uint8_t  table;            // scene: song table index
@@ -182,17 +205,24 @@ typedef struct {
     uint8_t  romVersion;       // header 0xBC
     uint8_t  romCheck;         // header 0xBD
     uint8_t  tableCount;       // song tables below, 0 = none (no MP2K found when saved)
-    uint8_t  pad4[3];
+    uint8_t  out2Mode;         // v6: Audio Out 2, OUT2_* (was padding)
+    uint8_t  pad4[2];
     uint32_t tableAddr[PATCH_TABLES];
     uint16_t tableRate[PATCH_TABLES];
     // ---- v5 ----
     int8_t   base[DEST_MAX];   // BASE values, in each destination's own units (DEST_COUNT used)
+    // ---- v7 ----
+    uint8_t  tableEngine[PATCH_TABLES];   // ENG_ID_* of each table above (0 = MP2K)
+    // ---- v8 ----
+    uint32_t krSampleBank;     // Krawall: the sample bank chosen on CAL, 0 = the largest found
+    uint32_t krInstrBank;      // ... and the instrument bank
 } Patch;
 
 extern Patch g_patch;
 
 // ---- live state, for the UI ----
-extern int      g_song;                 // selected playable song, -1 if none
+extern int      g_song;                 // the CUED playable song, -1 if none
+extern int      g_songPlaying;          // the one playing, -1 if stopped
 extern uint16_t g_uiMute;               // PLAY page mutes (bit per track)
 extern uint8_t  g_uiSolo;               // PLAY page solo, 0xFF = none
 extern int32_t  g_destVal[DEST_COUNT];  // each destination's CV + button value, -2048..2047
@@ -203,10 +233,12 @@ extern uint8_t  g_btnLatch;             // bit per BTN slot: latched on
 
 void mod_init(void);
 void mod_update(void);                  // every main-loop iteration
-void mod_song_select(int n);            // wraps; restarts the clock alignment
-void mod_song_step(int delta);
-void mod_restart(void);                 // restart the current song (RESET)
-void mod_set_list(int table, int listMode);   // switch song table / list, start its first song
+void mod_song_select(int n);            // cue song n (wraps); does not play it
+void mod_song_step(int delta);          // cue a song this far from the cue
+void mod_play(void);                    // play the cue from its start, now (PLAY)
+void mod_stop(void);                    // stop (STOP)
+void mod_restart(void);                 // restart the song playing; stopped, play the cue (RESET)
+void mod_set_list(int table, int listMode);   // switch song table / list: stops, cues its first
 
 void mod_default_patch(void);
 int  mod_patch_accept(Patch *p);        // validate, migrate older versions, clamp; 0 = reject

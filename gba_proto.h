@@ -211,7 +211,8 @@ static inline int gba_audedge_valid(uint32_t arg)
 // gate edges follow downstream, so a lost word delays a pulse instead of losing it. The host fires
 // one pulse per increment on Audio Out 1 (beat) and Audio Out 2 (loop). 0x74 is at Hamming
 // distance >= 3 from every low byte above, so one flipped bit cannot make it another kind.
-#define GBA_UP_PULSE        0x6074u   // [15:8]  beat count, [7:0] loop count (both wrap)
+#define GBA_UP_PULSE        0x6074u   // [15:8]  Audio Out 1 count (the clock out), [7:0] Audio
+                                      //         Out 2 count (loops or song starts); both wrap
 
 #define GBA_UP_TAG(w)       ((w) >> 16)
 #define GBA_UP_DATA(w)      ((w) & 0xFFFFu)

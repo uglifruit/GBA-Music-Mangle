@@ -155,6 +155,20 @@ extern uint8_t  g_plLoops;          // loop counter (track 1 jumped back), wraps
 extern uint8_t  g_plMaxChans;       // DirectSound voices allowed, 1..PL_DS_MAX
 extern uint16_t g_plGameRate;       // the game's mixing rate, for fixed-rate samples
 extern uint8_t  g_plRepeat;         // restart a song that ends (jingles) instead of stopping
+// PLAY ONCE (2026-10-29): set for a sound effect. A backward GOTO or an endless REPT ends the track
+// instead of looping it, and the song stops when its last track does, whatever g_plRepeat says.
+// Read at every jump, so set it before player_start() (mod.c does).
+extern uint8_t  g_plOnce;
+// The OUTPUTS (2026-10-29): Audio Out 1 is a clock and Audio Out 2 a song-start (or loop) pulse,
+// as counters the host turns into pulses. g_plClockOut counts every g_plOutTicks sequencer ticks,
+// so it follows whatever drives the sequencer (an external clock, or the internal tempo and its
+// mangles) and divides it to the PPQN chosen on SET. Its phase restarts with the song (tick 0 is
+// a pulse), so a drum machine on it lands on the song's beats; RESTART BAR and LOOP do not move
+// it, so a beat-repeat does not stutter the clock. g_plStarts counts every start from the top
+// (PLAY, RESET, a jingle repeating, an effect fired).
+extern uint8_t  g_plOutTicks;       // 24 / clock-out PPQN: 24, 12, 6, 3, 2 or 1
+extern uint8_t  g_plClockOut;       // wraps
+extern uint8_t  g_plStarts;         // wraps
 
 void     player_init(void);
 int      player_start(uint32_t songEntry);   // a song-table entry; returns 0 if unplayable
@@ -167,6 +181,10 @@ void     player_frame(void);                 // the ~60 Hz envelope step (DS + C
 uint32_t player_tempo_i(void);               // tempoD x tempoU >> 8: ticks/frame x 150
 unsigned pl_env(const Chan *c, int which);   // PL_ENV_*: the envelope value in force (see above)
 void     player_chaos_reroll(void);          // a new CHAOS pattern, from now and on every loop
+// A song's shape without playing it, for telling songs from effects (scan.h KIND_*): the length of
+// its first track in ticks, to its end or its loop point, patterns followed. Returns 1 if it loops,
+// 0 if it ends, -1 if the walk could not be sure (bounded; anything odd).
+int      player_song_shape(uint32_t songEntry, uint32_t *ticks);
 
 // ---- sections ----------------------------------------------------------------------------------
 // MP2K has no section markers, but every looping song has a loop point (each track's backward
@@ -190,6 +208,9 @@ void     player_restart_bar(void);
 #define PL_RESTART_BAR  3
 extern uint8_t g_plQueued;                   // PL_RESTART_*, 0 = none
 void     player_queue_restart(uint8_t what);
+// PLAY at the section line: PL_RESTART_SONG, but of this song-table entry (and its g_plOnce) rather
+// than the one playing. Replaced by any later request, like the others.
+void     player_queue_start(uint32_t songEntry, uint8_t once);
 // REPEAT BAR (the switch held up): while set, each section line jumps back to the section that
 // is ending, so the section playing when it was set loops until it is cleared.
 extern uint8_t g_plHoldBar;

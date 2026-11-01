@@ -28,6 +28,19 @@ SELECT_SONG = bytes([
     0x89, 0x18, 0x0a, 0x68, 0x01, 0x68, 0x10, 0x1c, 0x00, 0xf0,
 ])
 SELECT_SONG_MAX_DIFF = 8
+# Song or effect (scan.h KIND_*): player.c's player_song_shape walk, and scan.c's mp2k_kind.
+KIND_MUSIC, KIND_JINGLE, KIND_SFX = 0, 1, 2
+KIND_SFX_TICKS = 384
+KIND_NAMES = ['MUSIC', 'JINGLE', 'SFX']
+CLOCK_TABLE = [
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C,
+    0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x1C,
+    0x1E, 0x20, 0x24, 0x28, 0x2A, 0x2C, 0x30, 0x34, 0x36, 0x38, 0x3C, 0x40, 0x42,
+    0x44, 0x48, 0x4C, 0x4E, 0x50, 0x54, 0x58, 0x5A, 0x5C, 0x60,
+]
+CMD_FINE, CMD_GOTO, CMD_PATT, CMD_PEND, CMD_REPT, CMD_MEMACC = 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB9
+CMD_VOICE, CMD_PORT, CMD_XCMD, CMD_EOT, CMD_TIE = 0xBD, 0xCC, 0xCD, 0xCE, 0xCF
+CMD_ONE_ARG = {0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF, 0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC8}
 SELECT_SONG_TABLE_OFF = 40
 # Other engines' signatures (scan.h, "OTHER ENGINES"): text, engine name. In order of preference
 # for the info line.
@@ -150,14 +163,100 @@ class Sniff:
                 self.info = rom.data[at - ROM_BASE:at - ROM_BASE + n].decode('ascii').rstrip(' ')
 
 
-def find_heuristic(rom, sniff):
-    """The longest few runs (>= 8 entries, >= 4 real songs), longest first. Sniffs as it goes."""
+def sniff_all(rom, sniff):
+    """The sniff over every aligned word: scan.c runs it inside the signature pass (next_push_lr),
+    so other engines' text is known whether or not the cart also holds MP2K."""
+    for a in range(ROM_BASE, rom.end - 3, 4):
+        w = rom.u32(a)
+        if w in sniff.words:
+            sniff.hit(rom, a, w)
+
+
+def song_shape(rom, entry):
+    """player.c's player_song_shape: (loops, ticks) for the first track - loops 1 (backward GOTO),
+    0 (FINE) or -1 (unsure)."""
+    if not rom.ok(entry, 8):
+        return -1, 0
+    hdr = rom.u32(entry)
+    tc = header_ok(rom, hdr)
+    if not tc:
+        return -1, 0
+    a, stack, t, last = rom.u32(hdr + 8), [], 0, 0
+    for _ in range(8192):
+        if not rom.ok(a, 8):
+            return -1, t
+        c = rom.u8(a)
+        if c < 128:
+            if last < CMD_VOICE:
+                return -1, t
+            c = last
+        else:
+            a += 1
+            if c >= CMD_VOICE:
+                last = c
+        if c >= CMD_TIE:
+            for _k in range(3):
+                if rom.u8(a) >= 128:
+                    break
+                a += 1
+            continue
+        if c <= 0xB0:
+            t += CLOCK_TABLE[c - 0x80]
+            continue
+        if c == CMD_FINE:
+            return 0, t
+        if c == CMD_GOTO:
+            d = rom.u32(a)
+            if d < a:
+                return (1 if rom.ok(d, 1) else -1), t
+            a = d
+        elif c == CMD_PATT:
+            if len(stack) >= 3:
+                return -1, t
+            stack.append(a + 4)
+            a = rom.u32(a)
+        elif c == CMD_PEND:
+            if stack:
+                a = stack.pop()
+        elif c == CMD_REPT:
+            a += 5
+        elif c == CMD_MEMACC:
+            op = rom.u8(a)
+            a += 3 + (4 if 6 <= op <= 17 else 0)
+        elif c == CMD_PORT:
+            a += 2
+        elif c == CMD_EOT:
+            if rom.u8(a) < 128:
+                a += 1
+        elif c == CMD_XCMD:
+            sub = rom.u8(a)
+            a += 1
+            if sub == 0 or sub == 3 or sub > 13:
+                return -1, t
+            a += 4 if sub in (1, 13) else 2 if sub == 12 else 1
+        elif c in CMD_ONE_ARG:
+            a += 1
+        else:
+            return -1, t
+    return -1, t
+
+
+def song_kind(rom, entry, player):
+    """scan.c's mp2k_kind: short and ending (or a short loop on an effects player) is an effect."""
+    loops, ticks = song_shape(rom, entry)
+    if loops < 0:
+        return KIND_MUSIC
+    if ticks < KIND_SFX_TICKS and (not loops or player != 0):
+        return KIND_SFX
+    return KIND_MUSIC if loops else KIND_JINGLE
+
+
+def find_heuristic(rom):
+    """The longest few runs (>= 8 entries, >= 4 real songs), longest first."""
     best = []
     a = ROM_BASE
     while a < rom.end:
         w = rom.u32(a) if rom.ok(a, 4) else 0
-        if w in sniff.words:
-            sniff.hit(rom, a, w)
         if not (w & 3) and rom.isptr(w) and rom.ok(a, 8) and rom.u16(a + 4) < 32:
             n = real = 0
             while True:
@@ -213,7 +312,7 @@ def find_sound_mode(rom, select):
 
 
 def song_list(rom, table):
-    """scan_select with LIST_ALL: (entries, [(index, header, tracks, player), ...])."""
+    """scan_select with LIST_ALL: (entries, [(index, header, tracks, player, kind), ...])."""
     songs, entries, prev = [], 0, 0
     for i in range(0xFFFF):
         e = table + i * 8
@@ -225,7 +324,7 @@ def song_list(rom, table):
         entries = i + 1
         tc = header_ok(rom, hdr)
         if hdr != prev and tc and len(songs) < SCAN_MAX_SONGS:
-            songs.append((i, hdr, tc, rom.u16(e + 4)))
+            songs.append((i, hdr, tc, rom.u16(e + 4), song_kind(rom, e, rom.u16(e + 4))))
         prev = hdr
     return entries, songs
 
@@ -260,16 +359,22 @@ def main():
                 kept.append((method, select, table, entries, songs))
         return kept
 
-    # The heuristic (and the sniff riding on it) runs when the signature found no table with a
-    # playable song - none at all, or only false positives.
+    # The sniff rides on the signature pass, so it always runs; the heuristic runs when the
+    # signature found no table with a playable song - none at all, or only false positives. (The
+    # GBA then also runs the other engines' discovery: pcplay links that same C, this does not.)
     sniff = Sniff()
     tables = []
     add_tables([('SIGNATURE', s, t) for s, t in find_signatures(rom)], tables)
+    sniff_all(rom, sniff)
     kept = drop_empty(tables)
     if not kept:
         tables = []
-        add_tables([('HEURISTIC', 0, t) for t in find_heuristic(rom, sniff)], tables)
+        add_tables([('HEURISTIC', 0, t) for t in find_heuristic(rom)], tables)
         kept = drop_empty(tables)
+    if kept and sniff.engines:
+        names = ' '.join(f'XM x{sniff.xm}' if e == 'XM' else e
+                         for e in sorted(sniff.engines, key=['GAX', 'KRAWALL', 'XM'].index))
+        print(f'also       {names} text in the cart ({sniff.info}): the GBA looks for its songs too')
     if not kept:
         print('method     NONE - no MP2K song table found')
         if sniff.engines:
@@ -283,7 +388,7 @@ def main():
 
     print(f'tables     {len(kept)}')
     for n, (method, select, table, entries, songs) in enumerate(kept):
-        music = sum(1 for s in songs if s[3] == 0)
+        music = sum(1 for s in songs if s[4] != KIND_SFX)
         print(f'\n--- table {n + 1}: {method}')
         if select:
             print(f'selectsong 0x{select:08X}')
@@ -298,9 +403,9 @@ def main():
         else:
             print('sound mode not found (assuming 13379 Hz)')
         if args.songs:
-            print('\n  n   entry  header      tracks player')
-            for k, (i, hdr, tc, ms) in enumerate(songs):
-                print(f'{k + 1:4d}  {i:5d}  0x{hdr:08X}  {tc:5d}  {ms:5d}{"  (sfx)" if ms else ""}')
+            print('\n  n   entry  header      tracks player kind')
+            for k, (i, hdr, tc, ms, kind) in enumerate(songs):
+                print(f'{k + 1:4d}  {i:5d}  0x{hdr:08X}  {tc:5d}  {ms:5d}  {KIND_NAMES[kind]}')
     return 0
 
 

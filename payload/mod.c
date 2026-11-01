@@ -3,6 +3,7 @@
 
 #include "mod.h"
 #include "player.h"
+#include "engine.h"
 #include "clock.h"
 #include "scan.h"
 #include "rom.h"
@@ -27,17 +28,20 @@ const char *dest_name[DEST_COUNT] = {
     "ROM SCRUB", "LAYERS", "SOLO / MUTE", "TRANSPOSE", "FINE PITCH", "TEMPO", "REVERSE/DROP", "CRUSH",
     "ATTACK", "DECAY", "SUSTAIN", "RELEASE", "NOTE LENGTH", "REVERB", "VIBRATO/TRILL", "TREMOLO/GATE",
     "LFO SPEED", "CLEAR MANGLES", "CHAOS", "REROLL CHAOS", "RESTART LOOP", "RESTART BAR",
+    "PLAY", "STOP",
 };
 const char *dest_short[DEST_COUNT] = {
     "---", "CLK", "RST", "NXT", "SNG", "VSH", "TBL", "SST", "SCR", "LAY", "SOL", "TRN", "PIT",
     "TMP", "REV", "CRU", "ATK", "DCY", "SUS", "REL", "LEN", "RVB", "VIB", "TRM", "LFO", "CLR",
-    "CHS", "RRL", "RLP", "RBR",
+    "CHS", "RRL", "RLP", "RBR", "PLY", "STP",
 };
 const char *btn_mode_name[BTN_MODES] = { "HOLD", "LATCH", "STEP" };
 const char *btn_name[BTN_SLOTS] = { "A", "B", "L", "R", "UP", "DOWN", "LEFT", "RIGHT" };
 const uint16_t btn_key[BTN_SLOTS] = { KEY_A, KEY_B, KEY_L, KEY_R, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT };
 const char *swu_name[SWU_COUNT] = { "NOTHING", "BYPASS", "PAUSE", "REPEAT BAR" };
-const char *swd_name[SWD_COUNT] = { "NOTHING", "RESTART", "NEXT SONG" };
+const char *swd_name[SWD_COUNT] = { "NOTHING", "RESTART", "NEXT SONG", "PLAY" };
+const char *out2_name[OUT2_COUNT] = { "LOOP", "SONG START" };
+static const uint8_t s_outTicks[CLK_PPQN_COUNT] = { 24, 12, 6, 3, 2, 1 };   // 24 / clk_ppqn[]
 const uint32_t scrub_len[SCRUB_LEN_COUNT] = { 1024, 2048, 4096, 8192, 16384, 32768, 65536 };
 const uint16_t bar_len[BAR_LEN_COUNT] = { 24, 48, 96, 192, 384 };
 const char *bar_len_name[BAR_LEN_COUNT] = { "1 BEAT", "2 BEATS", "1 BAR", "2 BARS", "4 BARS" };
@@ -53,6 +57,7 @@ static const uint8_t s_kind[DEST_COUNT] = {
     KIND_BIP,  KIND_BIP,  KIND_BIP,  KIND_BIP,  KIND_BIP, KIND_BIP, KIND_BIP, KIND_BIP,
     KIND_BIP,  KIND_BIP,  KIND_BIP,  KIND_BIP,  KIND_BIP, KIND_BIP, KIND_BIP, KIND_BIP,
     KIND_BIP,  KIND_EDGE, KIND_BIP,  KIND_EDGE, KIND_EDGE, KIND_EDGE,
+    KIND_EDGE, KIND_EDGE,
 };
 
 // BASE ranges, in each destination's own units (see the BASE page and mod_update):
@@ -61,9 +66,11 @@ static const uint8_t s_kind[DEST_COUNT] = {
 //   /128 chance, CRUSH steps; ATTACK DECAY SUSTAIN RELEASE LENGTH and LFO SPEED virtual knobs,
 //   REVERB level added to the song's, VIBRATO and TREMOLO depth, CHAOS amount (x2 = 0..254).
 static const int8_t s_baseMin[DEST_COUNT] = { 0, 0, 0, 0, 0, -64, -127, -127, -127, -15, -16, -48, -100, -127, -127, -15,
-                                              -127, -127, -127, -127, -127, -127, -63, -63, -127, 0, -127, 0, 0, 0 };
+                                              -127, -127, -127, -127, -127, -127, -63, -63, -127, 0, -127, 0, 0, 0,
+                                              0, 0 };
 static const int8_t s_baseMax[DEST_COUNT] = { 0, 0, 0, 0, 0,  63,  127, 127,  127, 15, 16,  48,  100,  127, 127, 15,
-                                               127,  127,  127,  127,  127,  127, 63, 63,  127, 0, 127, 0, 0, 0 };
+                                               127,  127,  127,  127,  127,  127, 63, 63,  127, 0, 127, 0, 0, 0,
+                                               0, 0 };
 
 int dest_is_edge(int d)  { return d > 0 && d < DEST_COUNT && s_kind[d] == KIND_EDGE; }
 int dest_has_base(int d) { return d > 0 && d < DEST_COUNT && s_baseMax[d] != s_baseMin[d]; }
@@ -79,6 +86,7 @@ _Static_assert(__builtin_offsetof(Patch, cartTag) == GBA_PATCH_TAG_OFFSET, "cart
 _Static_assert(PATCH_TABLES == SCAN_MAX_TABLES, "the saved table list must hold every table");
 _Static_assert(DEST_COUNT <= DEST_MAX, "more destinations than Patch.base[] holds: append a new array");
 int      g_song    = -1;
+int      g_songPlaying = -1;
 uint16_t g_uiMute  = 0;
 uint8_t  g_uiSolo  = 0xFF;
 int32_t  g_destVal[DEST_COUNT];
@@ -96,6 +104,7 @@ static uint8_t  s_audInit;
 static uint8_t  s_lastSwitch = 1;
 static int      s_songBase;               // the song SONG CV is relative to
 static int      s_songCvOff;
+static int      s_pendingSong = -1;       // a PLAY queued for the section line
 
 // The follower (CV Out 2 / CV Out 1).
 static uint32_t s_followNotes;
@@ -165,12 +174,14 @@ void mod_default_patch(void)
     g_patch.repeat   = 1;
     g_patch.scrubLenIx = 2;               // 4096 samples
     g_patch.swUp     = SWU_REPEAT;
-    g_patch.swDown   = SWD_RESET;
+    g_patch.swDown   = SWD_PLAY;
     g_patch.cartSafe = 0;
     g_patch.barLenIx = BAR_LEN_DEFAULT;
+    g_patch.clkOutIx = CLK_OUT_DEFAULT;
+    g_patch.out2Mode = OUT2_LOOP;
 
     static const uint8_t factory[SRC_COUNT] = {
-        DEST_VSHIFT, DEST_TRANS, DEST_RESET, DEST_RBAR, DEST_CLOCK, DEST_CHAOS, DEST_TEMPO, DEST_SCRUB,
+        DEST_VSHIFT, DEST_TRANS, DEST_PLAY, DEST_RBAR, DEST_CLOCK, DEST_CHAOS, DEST_TEMPO, DEST_SCRUB,
     };
     for (int s = 0; s < SRC_COUNT; s++) {
         g_patch.mod[s].dest  = factory[s];
@@ -209,6 +220,26 @@ int mod_patch_accept(Patch *p)
         p->restartQ = 0;
         p->version = 5;
     }
+    // v5 -> v6: songs cued, not played; PLAY and STOP. The two output settings were padding.
+    if (p->version == 5) {
+        p->clkOutIx = CLK_OUT_DEFAULT;
+        p->out2Mode = OUT2_LOOP;
+        p->version = 6;
+    }
+    // v6 -> v7: the table engines were past a v6 patch's end (slot padding, or an old save's bytes).
+    if (p->version == 6) {
+        for (int i = 0; i < PATCH_TABLES; i++) p->tableEngine[i] = ENG_ID_MP2K;
+        p->version = 7;
+    }
+    // v7 -> v8: Krawall's banks were past the end too: the largest, as found.
+    if (p->version == 7) {
+        p->krSampleBank = 0;
+        p->krInstrBank = 0;
+        p->version = 8;
+    }
+    for (int i = 0; i < PATCH_TABLES; i++) if (p->tableEngine[i] >= ENG_ID_COUNT) p->tableCount = 0;
+    if (p->clkOutIx >= CLK_PPQN_COUNT) p->clkOutIx = CLK_OUT_DEFAULT;
+    if (p->out2Mode >= OUT2_COUNT) p->out2Mode = OUT2_LOOP;
     if (p->barLenIx >= BAR_LEN_COUNT) p->barLenIx = BAR_LEN_DEFAULT;
     if (p->restartQ > 1) p->restartQ = 0;
     if (p->tableCount > PATCH_TABLES) p->tableCount = 0;
@@ -231,6 +262,7 @@ void mod_patch_applied(void)
     g_mixGain     = g_patch.gain;
     g_mods.scrubLen = scrub_len[g_patch.scrubLenIx];
     g_plBarTicks  = bar_len[g_patch.barLenIx < BAR_LEN_COUNT ? g_patch.barLenIx : BAR_LEN_DEFAULT];
+    g_plOutTicks  = s_outTicks[g_patch.clkOutIx < CLK_PPQN_COUNT ? g_patch.clkOutIx : CLK_OUT_DEFAULT];
     rom_set_speed(g_patch.cartSafe ? ROM_SPEED_SAFE : ROM_SPEED_FAST);
 }
 
@@ -245,11 +277,14 @@ void mod_patch_prepare_save(void)
     g_patch.cartTag    = rom_cart_tag();
     g_patch.romVersion = g_romVersion;
     g_patch.romCheck   = g_romCheck;
+    g_patch.krSampleBank = g_krBankWant[0];      // CAL's choice of Krawall banks, if any
+    g_patch.krInstrBank  = g_krBankWant[1];
     int n = (g_scan.method == SCAN_NONE) ? 0 : g_tableCount;
     g_patch.tableCount = (uint8_t)n;
     for (int i = 0; i < PATCH_TABLES; i++) {
         g_patch.tableAddr[i] = i < n ? g_tables[i].songTable : 0;
         g_patch.tableRate[i] = i < n ? g_tables[i].gameRate : 0;
+        g_patch.tableEngine[i] = i < n ? g_tables[i].engine : 0;
     }
 }
 
@@ -267,8 +302,17 @@ void mod_patch_loaded(void)
     int same = 1;
     for (int i = 0; i < 4; i++) if (g_patch.game[i] != g_romCode[i]) same = 0;
     if (!same) return;
+    // Krawall's banks are the patch's too: a different pair is a different song list.
+    g_krBankWant[0] = g_patch.krSampleBank;
+    g_krBankWant[1] = g_patch.krInstrBank;
+    if (eng_kr_bank_apply() && g_scan.engine == ENG_ID_KRAWALL) {
+        mod_stop();
+        scan_select(g_tableIx, g_listMode);
+    }
     if (g_patch.table < g_tableCount && (g_patch.table != g_tableIx || g_patch.list != g_listMode)) {
+        mod_stop();                              // the song numbers are about to change under it
         scan_select(g_patch.table, g_patch.list);
+        eng_follow_table();
         g_plGameRate = g_scan.gameRate;          // the table's own mixing rate, as mod_set_list
     }
     if (g_patch.song < g_songCount) {
@@ -289,37 +333,58 @@ static void clear_mangles(void)
 }
 
 // ---- songs ---------------------------------------------------------------------------------------
+// g_song is the CUE: what L/R, NEXT, SONG and a STEP move. g_songPlaying is what is playing. Only
+// PLAY (and RESET while stopped) turns the one into the other.
+// noinline: these run on a song change, rarely, so they stay in EWRAM rather than being inlined
+// into mod_update (IWRAM).
+#define RARE __attribute__((noinline))
 
-void mod_restart(void)
+static RARE void cue_song(int n)
 {
-    if (g_song < 0) return;
-    player_start(scan_song_entry(g_song));
-    clock_reset();
-}
-
-static void play_song(int n)
-{
-    if (g_songCount == 0) { g_song = -1; player_stop(); return; }
+    if (g_songCount == 0) { g_song = -1; return; }
     while (n < 0) n += g_songCount;
     while (n >= g_songCount) n -= g_songCount;
     g_song = n;
-    g_uiMute = 0;
-    g_uiSolo = 0xFF;
-    mod_restart();
 }
 
-void mod_song_select(int n)
+// Start song n now. The mutes belong to the song, so a different song starts with none. An effect
+// plays once (player.h, g_plOnce).
+static RARE void start_song(int n)
 {
-    play_song(n);
+    if (n < 0 || n >= g_songCount) return;
+    if (n != g_songPlaying) { g_uiMute = 0; g_uiSolo = 0xFF; }
+    s_pendingSong = -1;
+    g_plOnce = (uint8_t)(g_songKind[n] != KIND_MUSIC);     // effects and jingles play once
+    g_songPlaying = g_eng->start(n) ? n : -1;
+    clock_reset();
+}
+
+RARE void mod_play(void) { start_song(g_song); }
+
+RARE void mod_stop(void)
+{
+    g_eng->stop();
+    g_plQueued = 0;
+    s_pendingSong = -1;
+    g_songPlaying = -1;
+}
+
+RARE void mod_restart(void) { start_song(g_songPlaying >= 0 ? g_songPlaying : g_song); }
+
+RARE void mod_song_select(int n)
+{
+    cue_song(n);
     s_songBase  = g_song;
     s_songCvOff = 0;
 }
 
-void mod_song_step(int delta) { mod_song_select(g_song + delta); }
+RARE void mod_song_step(int delta) { mod_song_select(g_song + delta); }
 
 void mod_set_list(int table, int listMode)
 {
+    mod_stop();
     scan_select(table, listMode);
+    eng_follow_table();
     g_patch.table = g_tableIx;
     g_patch.list  = g_listMode;
     g_plGameRate  = g_scan.gameRate;
@@ -466,7 +531,9 @@ IWRAM_CODE void mod_update(void)
             continue;
         }
         if (b->mode == BTN_STEP) {
-            if (pressed) g_patch.base[d] = (int8_t)clampi(g_patch.base[d] + b->amount, s_baseMin[d], s_baseMax[d]);
+            // SONG has no BASE value: a STEP on it moves the cue, so a button can browse the list.
+            if (pressed && d == DEST_SONG) mod_song_step(b->amount);
+            else if (pressed) g_patch.base[d] = (int8_t)clampi(g_patch.base[d] + b->amount, s_baseMin[d], s_baseMax[d]);
             continue;
         }
         if (b->mode == BTN_LATCH && pressed) g_btnLatch ^= (uint8_t)(1u << i);
@@ -488,34 +555,53 @@ IWRAM_CODE void mod_update(void)
     if (sw == 0 && s_lastSwitch != 0) {
         if (g_patch.swDown == SWD_RESET) edgeN[DEST_RESET]++;
         else if (g_patch.swDown == SWD_NEXT) edgeN[DEST_NEXT]++;
+        else if (g_patch.swDown == SWD_PLAY) edgeN[DEST_PLAY]++;
     }
     s_lastSwitch = sw;
 
     // ---- edges: song changes and resets first, then the clock, so a reset and the pulse it was
     //      patched alongside land as "restart, then tick 0" ----
+    // What is playing: a song that ended (SONG END = STOP, or an effect) is no longer playing, and
+    // a queued PLAY that has happened is. A PLAY queued on a song that then ended starts now.
+    if (!g_eng->running()) {
+        if (s_pendingSong >= 0) start_song(s_pendingSong);
+        else g_songPlaying = -1;
+    } else if (s_pendingSong >= 0 && !g_plQueued) {
+        if (s_pendingSong != g_songPlaying) { g_uiMute = 0; g_uiSolo = 0xFF; }
+        g_songPlaying = s_pendingSong;
+        s_pendingSong = -1;
+    }
     if (g_song >= 0) {
         // Each restart is followed by clock_reset(), as RESET's is: the restarted spot's first tick
         // plays at once (INT), or on the pulse it arrived with (EXT).
         // AT BAR END queues them instead: the player does it on the next section line, on the grid.
-        int q = g_patch.restartQ;
-        if (edgeN[DEST_NEXT]) mod_song_step(1);
-        else if (edgeN[DEST_RESET]) { if (q) player_queue_restart(PL_RESTART_SONG); else mod_restart(); }
-        else if (edgeN[DEST_RLOOP]) {
-            if (q) player_queue_restart(PL_RESTART_LOOP); else { player_restart_loop(); clock_reset(); }
-        } else if (edgeN[DEST_RBAR]) {
-            if (q) player_queue_restart(PL_RESTART_BAR); else { player_restart_bar(); clock_reset(); }
-        }
+        // Only while music plays: a stopped player has no grid, and an effect is a one-shot.
+        int q = g_patch.restartQ && g_eng->running() && !g_plOnce;
+        if (edgeN[DEST_NEXT]) mod_song_step(1);                  // cues; a PLAY with it plays it
         if (mapped[DEST_SONG]) {
-            int off = (int)(g_destVal[DEST_SONG] / 128);         // +-16 songs
+            int off = (int)(g_destVal[DEST_SONG] / 128);         // +-16 songs, cued
             if (off != s_songCvOff) {
                 s_songCvOff = off;
-                play_song(s_songBase + off);
+                cue_song(s_songBase + off);
             }
+        }
+        if (edgeN[DEST_STOP]) mod_stop();
+        else if (edgeN[DEST_PLAY]) {
+            if (q) { s_pendingSong = g_song; g_eng->queue_start(g_song, g_songKind[g_song] != KIND_MUSIC); }
+            else mod_play();
+        } else if (edgeN[DEST_RESET]) {
+            if (q) { s_pendingSong = -1; g_eng->queue_restart(PL_RESTART_SONG); } else mod_restart();
+        } else if (edgeN[DEST_RLOOP]) {
+            if (q) { s_pendingSong = -1; g_eng->queue_restart(PL_RESTART_LOOP); }
+            else { g_eng->restart_loop(); clock_reset(); }
+        } else if (edgeN[DEST_RBAR]) {
+            if (q) { s_pendingSong = -1; g_eng->queue_restart(PL_RESTART_BAR); }
+            else { g_eng->restart_bar(); clock_reset(); }
         }
     }
     for (uint8_t n = edgeN[DEST_CLOCK]; n; n--) clock_pulse();
     if (edgeN[DEST_CLEAR]) clear_mangles();
-    if (edgeN[DEST_REROLL]) player_chaos_reroll();
+    if (edgeN[DEST_REROLL]) g_eng->reroll();
 
     // ---- the mangles: CV + buttons (dv) plus the BASE value, each in its own units ----
     int bypass = g_bypass;
@@ -631,5 +717,6 @@ IWRAM_CODE void mod_update(void)
         }
     }
 
-    link_post_pulse(g_plBeats, g_plLoops);
+    // Audio Out 1: the clock. Audio Out 2: loops, or song starts.
+    link_post_pulse(g_plClockOut, g_patch.out2Mode == OUT2_START ? g_plStarts : g_plLoops);
 }

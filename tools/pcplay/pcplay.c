@@ -29,6 +29,7 @@
 #include "scan.h"
 #include "player.h"
 #include "mixer.h"
+#include "engine.h"
 
 uint8_t g_hostIo[0x400];
 static uint8_t *s_rom;
@@ -116,15 +117,15 @@ static void render(Render *r, uint32_t blocks, int fuzz)
             g_mods.lfoSpeed      = (uint8_t)(1 + rnd() % 255);
             g_mods.chaos         = (uint8_t)((rnd() & 1) ? rnd() : 0);
             g_plBarTicks         = (uint16_t)(24u << (rnd() % 5u));
-            if (rnd() % 3u == 0) player_restart_bar();
-            else if (rnd() % 5u == 0) player_restart_loop();
+            if (rnd() % 3u == 0) g_eng->restart_bar();
+            else if (rnd() % 5u == 0) g_eng->restart_loop();
         }
-        tickAcc += AUDIO_BLOCK * player_tempo_i() * 408u;
-        for (int n = 0; tickAcc >= TICK_ONE && n < 8; n++) { tickAcc -= TICK_ONE; player_tick(); }
+        tickAcc += AUDIO_BLOCK * g_eng->tempo_i() * 408u;
+        for (int n = 0; tickAcc >= TICK_ONE && n < 8; n++) { tickAcc -= TICK_ONE; g_eng->tick(); }
         if (tickAcc >= TICK_ONE) tickAcc = TICK_ONE - 1;
         frameAcc += AUDIO_BLOCK * 1000u;
-        while (frameAcc >= FRAME_MILLI) { frameAcc -= FRAME_MILLI; player_frame(); }
-        player_update();
+        while (frameAcc >= FRAME_MILLI) { frameAcc -= FRAME_MILLI; g_eng->frame(); }
+        g_eng->update();
         mixer_render(L, R);
         check_mixer();
         for (int i = 0; i < AUDIO_BLOCK; i++) {
@@ -179,16 +180,16 @@ int main(int argc, char **argv)
 
     if (!rom_init()) { fprintf(stderr, "no cartridge header (0x96 at 0xB2)\n"); return 1; }
     s_strict = 1;
-    scan_run(NULL);
+    scan_run(NULL, flag(argc, argv, "--full"));
     // The scan starts on the MUSIC list when there is one (as the GBA does); --list overrides it.
     if (flag(argc, argv, "--songtable") || flag(argc, argv, "--list")) {
         scan_select((int)argl(argc, argv, "--songtable", 1) - 1, (int)argl(argc, argv, "--list", g_listMode));
     }
     static const char *meth[4] = { "NONE", "SIGNATURE", "HEURISTIC", "SAVED" };
     static const char *list[3] = { "all", "music", "sfx" };
-    printf("%s [%s]  %u KB  scan %s  table %u/%u at 0x%08X  %s: %u songs  rate %u\n", g_romTitle,
-           g_romCode, g_romSize >> 10, meth[g_scan.method], g_tableIx + 1u, g_tableCount, g_scan.songTable,
-           list[g_listMode % 3], g_songCount, g_scan.gameRate);
+    printf("%s [%s]  %u KB  scan %s  engine %s  table %u/%u at 0x%08X  %s: %u songs  rate %u\n", g_romTitle,
+           g_romCode, g_romSize >> 10, meth[g_scan.method], eng_by_id(g_scan.engine)->name, g_tableIx + 1u,
+           g_tableCount, g_scan.songTable, list[g_listMode % 3], g_songCount, g_scan.gameRate);
     if (g_scan.method == SCAN_NONE) {
         printf("engine %s%s%s", g_engines ? "" : "unknown (no signature)", (g_engines & ENG_GAX) ? "GAX " : "",
                (g_engines & ENG_KRAWALL) ? "KRAWALL " : "");
@@ -198,31 +199,37 @@ int main(int argc, char **argv)
     }
 
     if (flag(argc, argv, "--songs")) {
-        for (int n = 0; n < g_songCount; n++) {
+        static const char *kind[3] = { "MUSIC", "JINGLE", "SFX" };
+        for (int n = 0; n < g_songCount && g_scan.engine != ENG_ID_MP2K; n++)
+            printf("%4d  song %4u  %s\n", n, g_songIx[n], kind[g_songKind[n] % 3]);
+        for (int n = 0; n < g_songCount && g_scan.engine == ENG_ID_MP2K; n++) {
             uint32_t e = scan_song_entry(n), hdr = rom_u32(e);
-            printf("%4d  entry %4u  header 0x%08X  tracks %2u  player %u\n", n, g_songIx[n], hdr,
-                   rom_u8(hdr), g_songPlayer[n]);
+            printf("%4d  entry %4u  header 0x%08X  tracks %2u  player %u  %s\n", n, g_songIx[n], hdr,
+                   rom_u8(hdr), g_songPlayer[n], kind[g_songKind[n] % 3]);
         }
         return 0;
     }
 
     player_init();
+    eng_follow_table();
     g_plGameRate = g_scan.gameRate;
 
     long fuzz = argl(argc, argv, "--fuzz", 0);
     if (fuzz > 0) {
         for (int n = 0; n < g_songCount; n++) {
             Render r = { 0 };
-            player_start(scan_song_entry(n));
+            g_eng->start(n);
             render(&r, (uint32_t)(fuzz * AUDIO_RATE / AUDIO_BLOCK), 1);
-            printf("song %4d  ticks %6u  peak %3u\n", n, g_plTicks, r.peak);
+            char d[48];
+            eng_diag(d);
+            printf("song %4d  ticks %6u  peak %3u  %s\n", n, g_plTicks, r.peak, d);
         }
         printf("fuzz done: %lu bad reads\n", s_badReads);
         return s_badReads ? 1 : 0;
     }
 
     int song = (int)argl(argc, argv, "--song", 0);
-    if (!player_start(scan_song_entry(song))) { fprintf(stderr, "song %d is not playable\n", song); return 1; }
+    if (!g_eng->start(song)) { fprintf(stderr, "song %d is not playable\n", song); return 1; }
     g_mods.mute          = (uint16_t)argl(argc, argv, "--mute", 0);
     g_mods.voiceShift    = (int16_t)argl(argc, argv, "--voice-shift", 0);
     g_mods.tableOffset   = (int16_t)argl(argc, argv, "--table", 0);

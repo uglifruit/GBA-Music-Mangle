@@ -33,12 +33,28 @@
 #define SCAN_MAX_TABLES 8
 
 #define LIST_ALL   0
-#define LIST_MUSIC 1        // music player 0
-#define LIST_SFX   2        // any other player
+#define LIST_MUSIC 1        // songs and jingles: anything long (KIND_MUSIC, KIND_JINGLE)
+#define LIST_SFX   2        // effects: anything short (KIND_SFX)
 #define LIST_COUNT 3
+
+// SONG OR EFFECT, by content (2026-11-01). MP2K's music-player number was the first rule, and a cart
+// filed its songs under an effects player; so every engine reports a song's shape instead - its
+// length to the end of one pass, and whether it loops - and:
+//   short (under KIND_SFX_TICKS, four 4/4 bars), not looping   an effect: plays once, every trigger
+//                                                              restarts it
+//   looping                                                    music (a looping hum is a sound that
+//                                                              goes on until stopped, like a song)
+//   long, not looping                                          a jingle: plays once, as a song does
+// MP2K alone keeps one use for its player number: a SHORT LOOP on an effects player (not 0) is an
+// effect. A long song on any player is music, which is what misfiled songs needed.
+#define KIND_MUSIC     0
+#define KIND_JINGLE    1
+#define KIND_SFX       2
+#define KIND_SFX_TICKS 384
 
 typedef struct {
     uint8_t  method;        // SCAN_*
+    uint8_t  engine;        // ENG_ID_* (engine.h): which player reads this table
     uint32_t selectSong;    // address of the matched routine (SIGNATURE only), else 0
     uint32_t songTable;     // address of entry 0, or 0
     uint16_t tableEntries;  // entries before the first non-pointer (saptapper's count)
@@ -57,22 +73,24 @@ extern uint8_t    g_listMode;         // LIST_*
 // Playable songs in the selected table and list mode: table indices whose header has at least one
 // track, consecutive duplicates dropped, and each one's music player. This is what PLAY steps through.
 extern uint16_t g_songIx[SCAN_MAX_SONGS];
-extern uint8_t  g_songPlayer[SCAN_MAX_SONGS];
+extern uint8_t  g_songPlayer[SCAN_MAX_SONGS];   // MP2K's music player (shown, no longer a filter)
+extern uint8_t  g_songKind[SCAN_MAX_SONGS];     // KIND_*
 extern uint16_t g_songCount;
 
 // Called every 64 KB of scanning with progress in 1/256ths, so the caller can keep the link alive
 // and draw a bar. May be NULL.
 typedef void (*ScanProgressFn)(uint32_t done256);
 
-// Find every table and select the first, in the current list mode. Returns g_scan.method, or
-// SCAN_NONE if no table holds a playable song.
-int scan_run(ScanProgressFn progress);
+// Find every table, of every engine, and select the first with music. Returns g_scan.method, or
+// SCAN_NONE if no table holds a playable song. Which engines are looked for: MP2K always; GAX and
+// Krawall when their text is in the cart; MusyX when nothing else was found. full = all of them.
+int scan_run(ScanProgressFn progress, int full);
 
-// Install tables found on an earlier boot (a saved patch's) instead of scanning: addresses and
-// mixing rates. Each is checked as the scan checks its own (it must hold a playable song); rates
+// Install tables found on an earlier boot (a saved patch's) instead of scanning: addresses,
+// mixing rates and engines (ENG_ID_*). Each is checked as the scan checks its own (it must hold a playable song); rates
 // outside m4a's 5734..42048 become 13379. Returns the tables kept; 0 leaves the state as a scan that
 // found nothing, and the caller should scan for real.
-int scan_install(int n, const uint32_t *addr, const uint16_t *rate);
+int scan_install(int n, const uint32_t *addr, const uint16_t *rate, const uint8_t *engine);
 
 // Select a table (0 .. g_tableCount-1) and list mode, and rebuild the song list. Returns the count.
 int scan_select(int table, int listMode);
@@ -80,8 +98,15 @@ int scan_select(int table, int listMode);
 // A believable song header? Writes its track count. Exposed for the player's own checks.
 int scan_header_ok(uint32_t hdr, int *tracks);
 
-// The table address of playable song n (0 .. g_songCount-1).
+// The table address of playable song n (0 .. g_songCount-1). MP2K tables only.
 uint32_t scan_song_entry(int n);
+
+// OTHER ENGINES' TABLES (engine.c). When neither MP2K pass finds a table, the scan offers every
+// 64 KB of the image to eng_discover_slice(), which adds what it finds here. For such a table
+// songTable is the engine's own root address, and scan_select() asks eng_table_songs() for its list.
+void scan_add_table(uint8_t engine, uint32_t root);
+// Forget the cached song list: an engine's list changed under the same table (Krawall's banks).
+void scan_forget(void);
 
 // OTHER ENGINES. A cart with no MP2K table gets the heuristic pass, which reads every word of the
 // image; while it does, it also looks for the text other sound engines leave in a cart, so the
@@ -96,6 +121,7 @@ uint32_t scan_song_entry(int n);
 #define ENG_GAX     (1u << 0)
 #define ENG_KRAWALL (1u << 1)
 #define ENG_XM      (1u << 2)
+#define ENG_MUSYX   (1u << 3)                 // found by its structure, not by text (engine.c)
 #define ENGINE_INFO_LEN 38                    // a full line of 5x7 text, less a margin
 extern uint8_t  g_engines;                    // ENG_* found by the last scan's heuristic pass
 extern uint16_t g_xmCount;                    // XM modules found
