@@ -162,18 +162,22 @@ an assistant.
     A macro header's first byte looks like the voice (0xFF any PCM voice, 0..3 a PSG channel?);
     some 0xFF macros also VOICE_ON. Worth doing against these dumps, not from the GB manual
     (whose opcode numbers differ).
-  - **Keymaps** (header byte 2 = 1; BattleBots' drums): entries are {sample u16, key x256, pan?, ?,
-    flag, ?}, but notes run past their length (keymap 131: 32 entries, notes 32..44), so they do not
-    start at note 0. The base is unknown; those notes are rejected (`R8`). Don't guess it.
   - `C30` (8 bytes, e.g. `00000000ff4400`) appears in layer-like macros that start nothing else.
-  - Keymap evidence (10 games, 2026-11-03): an entry is {sample u16, TRANSPOSE s16 in 1/256
-    semitone, 4 bytes}; the "key" column is a transpose, constant across a zone (Rayman HR km 66:
-    +16/+6/-4 over three samples), falling by one per entry in drum kits so every drum lands on one
-    pitch. Index = note - start. Start 36 fits every keymap's notes in Rayman HR, Star Wars NDA, The
-    Incredibles, Ready 2 Rumble 2, Ace Lightning, Beckham; 24 in BattleBots and Spider-Man (their
-    lowest notes are exactly 24); Lady Sia fits neither. Estimating start = sample root - transpose -
-    index gives ~36 / ~22 per game, but not for kits whose transposes are all 0 (Beckham, Lady Sia),
-    and whether transpose 0 means "the sample's own pitch" is unsettled. Not implemented yet.
+- **Keymaps (implemented 2026-11-03; drum kits and multisampled instruments):** header byte 2 = 1,
+  a u16 count, entries {sample u16, TRANSPOSE s16 in 1/256 semitone, 4 bytes (pan? flags?)}. The
+  transpose is constant across a zone (Rayman HR km 66: +16/+6/-4 over three samples) and falls by
+  one per entry in drum kits, so every hit lands on its sample's own key. EVERY keymap in ten games
+  is reached through PLAYMACRO (op 29: byte, macro u16, key offset s16 in SEMITONES), and the offset
+  is where the map starts: -36 in most games, -24 in BattleBots and Spider-Man, per macro in Lady
+  Sia (-36 -46 -56 -59). So: entry = note + key_add (MsVoice.key_add sums the offsets), pitch = note
+  + transpose (the original note: that is what gives drums their natural pitch). Every note the
+  songs send fits; outside the map plays the nearest entry and warns (W 0x20, never seen yet).
+  - Two bugs fixed with it: PLAYMACRO into a keymap ran on from ip 0 and rejected the voice (the
+    `R8` everywhere), and its offset was added to the pitch as Q8 minus 60 semitones.
+  - Kits whose transposes are all 0 (Beckham's, Lady Sia's) play at note + 0, e.g. note 36 against
+    a sample rooted at 60: two octaves down. That follows the rule; whether it is right needs ears.
+  - The mixes are loud now (Rayman, Incredibles, Ace peak at full scale) but clip on at most 0.03 %
+    of samples.
   - **The sample root key is a byte at +10** (fixed 2026-11-03): +11 is something else (1 on Harry
     Potter CoS's 16/32-byte waveform samples and on two of Lady Sia's). The u16 read hid Harry Potter
     entirely and rejected those two Lady Sia samples, so Lady Sia was missing notes on hardware

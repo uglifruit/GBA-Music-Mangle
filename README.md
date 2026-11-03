@@ -59,7 +59,7 @@ engine row gives each engine's own diagnostics; note it when reporting a song:
 |---|---|---|
 | GAX | `S` songs, `OLD` how many the first, stricter scan would have kept, `FX` effect banks, then the check that turned away the most near-misses (`SHP` shape, `NOT` notes, `INS` instruments, `SMP` samples, `CHN` channels) | Tells a cart with few songs found where the rest went. `2.X UNSUPPORTED`: the cart's GAX is version 2, whose songs this can't read yet |
 | Krawall | `M` modules, `S`/`I` the sample and instrument banks found, unknown effects, error | Two more rows choose its **sample and instrument banks**: Krawall stores them apart from the songs, and the scan takes the largest of each. UP/DOWN picks the row, LEFT/RIGHT steps through the other candidates; the choice is saved with the patch |
-| MusyX | unknown commands, warnings, `R` why notes were turned away (1 no voices, 2 no such instrument, 4 bad sample, 8 bad macro or keymap), error, `PSG` | `PSG`: the song asks for the Game Boy sound channels for some parts (square waves, noise). Those parts are silent for now: only sampled parts play |
+| MusyX | unknown commands, `W` warnings (20: a note fell outside its drum kit and took the nearest entry), `R` why notes were turned away (1 no voices, 2 no such instrument, 4 bad sample, 8 bad macro or keymap), error, `PSG` | `PSG`: the song asks for the Game Boy sound channels for some parts (square waves, noise). Those parts are silent for now: only sampled parts play |
 
 ### "No music found that it can play"
 

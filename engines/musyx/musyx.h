@@ -20,6 +20,7 @@ extern "C" {
 #define MS_WARN_PREVIEW_CHAIN 4u
 #define MS_WARN_VOICE_LIMIT 8u
 #define MS_WARN_REJECTED_VOICE 16u
+#define MS_WARN_KEYMAP_RANGE 32u     // a note outside its keymap played the nearest entry
 // Why voices were rejected (MsPlayer.why, a mask): the program's sound-list entry allows no voices,
 // names a macro past the table, a sample failed its checks, a macro ran off its range/budget.
 #define MS_WHY_NO_VOICES 1u
@@ -46,6 +47,7 @@ typedef struct {
     MsPcm pcm;
     uint32_t macro_begin,macro_end,ip,keyoff,wait,gate_left,age,sample_rate;
     int32_t pitch;uint16_t macro_id,root_note;
+    int16_t key_add;   // PLAYMACRO key offsets so far: a keymap reached through them is indexed by note + key_add
     uint8_t owner,note,velocity,volume,active,released,has_sample,tail,chains;
 } MsVoice;
 typedef struct {

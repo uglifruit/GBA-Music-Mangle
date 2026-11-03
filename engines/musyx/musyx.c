@@ -104,6 +104,12 @@ void ms_init(MsPlayer *p,MsRom r,const MsHooks *hooks){
         p->hooks.done=hooks->done;p->hooks.note=hooks->note;p->hooks.event=hooks->event;}
     p->last_opcode=UINT32_MAX;p->mods.tempo=256;p->rng=0x4D535958;p->repeat=1;p->preview=1;
 }
+// KEYMAPS (macro header byte 2 = 1): a u16 count, then entries {sample u16, transpose s16 in 1/256
+// semitone, 4 bytes}. Every keymap in ten games' dumps (2026-11-03) is reached through PLAYMACRO,
+// whose key offset is how far down the map starts: -36 in most, -24 in BattleBots and Spider-Man, and
+// per macro in Lady Sia (-36 -46 -56 -59), each fitting every note its songs send. So a note plays
+// entry note + key_add, at note + transpose: drum kits are written with the transpose falling one
+// per entry, which puts every hit on its sample's own key.
 static int bind(MsPlayer *p,uint32_t root){
     if(!ms_root_valid(&p->rom,root))return 0;
     p->song.root=root;p->macros=relative(&p->rom,root,root,4);p->samples=relative(&p->rom,root,root+28,4);
@@ -176,12 +182,17 @@ static int macro_select(MsPlayer *p,unsigned i,unsigned id){
     uint32_t section=relative(r,p->song.root,p->song.root+4,1);if(section>a&&section<end)end=section;
     v->macro_begin=a;v->macro_end=end;v->macro_id=(uint16_t)id;v->keyoff=0;v->wait=0;
     if(b(r,a+2)){
-        // GBA keymaps contain sample index and Q8 pitch per key; unknown trailing fields ignored in preview.
+        // A keymap (see KEYMAPS above): entry note + key_add, played at note + transpose. The pan and
+        // the other trailing bytes are ignored (bit 54 still says "approximate"). A note outside the
+        // map plays its nearest entry (warned).
         if(!p->preview||!ok(r,a+4,2)){unsupported(p,i,54);off(p,i);return 0;}
         if(!unsupported(p,i,54))return 0;
-        unsigned count=h(r,a+4);uint32_t item=a+6+v->note*8u;
-        if(v->note>=count||!ok(r,item,8)){reject(p,i,MS_WHY_MACRO,item);return 0;}
-        v->pitch=(int16_t)h(r,item+2);v->ip=0;v->tail=1;return start_sample(p,i,h(r,item),0);
+        unsigned count=h(r,a+4);int k=(int)v->note+v->key_add;
+        if(!count){reject(p,i,MS_WHY_MACRO,a);return 0;}
+        if(k<0||k>=(int)count){k=k<0?0:(int)count-1;p->warnings|=MS_WARN_KEYMAP_RANGE;}
+        uint32_t item=a+6+(uint32_t)k*8u;
+        if(!ok(r,item,8)){reject(p,i,MS_WHY_MACRO,item);return 0;}
+        v->pitch=(int32_t)v->note*256+(int16_t)h(r,item+2);v->ip=0;v->tail=1;return start_sample(p,i,h(r,item),0);
     }
     v->ip=a+4;return 1;
 }
@@ -240,8 +251,14 @@ static void macro_run(MsPlayer *p,unsigned i){
         case 29:
             if(!unsupported(p,i,op))return;
             if(++v->chains>4){reject(p,i,MS_WHY_MACRO,from);return;}
-            p->warnings|=MS_WARN_PREVIEW_CHAIN;v->pitch=clip(v->pitch+(int16_t)h(r,from+4)-60*256,-32768,32767);
-            if(!macro_select(p,i,h(r,from+2)))return;
+            // PLAYMACRO macro u16, key offset s16 (semitones). Into a keymap the offset picks the entry;
+            // into a macro it moves the pitch. A keymap starts its sample and ends the macro (tail), so
+            // stop here: running on from ip 0 rejected every voice that took this road.
+            p->warnings|=MS_WARN_PREVIEW_CHAIN;
+            {int add=(int16_t)h(r,from+4);v->key_add=(int16_t)clip(v->key_add+add,-128,127);
+             if(!macro_select(p,i,h(r,from+2)))return;
+             if(v->tail||!v->ip)return;
+             v->pitch=clip(v->pitch+add*256,-32768,32767);}
             break;
         case 31:break; // documented no-op on GBA
         case 34:if(b(r,from+1)==255){release(p,i);return;}if(!unsupported(p,i,op))return;break;

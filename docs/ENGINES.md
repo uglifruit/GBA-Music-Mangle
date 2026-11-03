@@ -13,7 +13,10 @@ Dumps of four of Andy's carts settled what the hardware reports could not:
   starting program of each MIDI channel; tracks started on program 0, and these songs send no program
   changes, so every part played the first sound (on Denki, a PSG macro). Fixed in `ms_start`. Still
   silent: the parts written for the Game Boy channels (VOICE_ON / SETNOISE / HARDENVELOPE; the CAL
-  row shows `PSG`), and BattleBots' drum keymaps, whose first key is not yet known.
+  row shows `PSG`). Keymaps (drum kits, multisampled instruments) now play: every one is reached
+  through PLAYMACRO, whose key offset says where the map starts, and its entries transpose each note
+  (see musyx.c, KEYMAPS). Harry Potter: Chamber of Secrets was hidden by reading the sample root key
+  as two bytes; it is one.
 - **Krawall (Lemony Snicket): not found.** The cart has no "Krawall" text, only the player's CVS line
   `$Id: player.c,v 1.4 2003/03/19 ... seb Exp`, now a signature when "seb" (the author) follows. Its
   20 modules then play. Discovery was also brought in line with UnkrawerterGBA (banks judged on
