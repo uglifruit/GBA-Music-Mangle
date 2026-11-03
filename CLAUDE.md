@@ -226,6 +226,12 @@ an assistant.
 - modtest takes a sixth cart, `eng/krawall2.gba` (mkengines.py): sub-songs, the 255 envelope, the
   junk byte, a wide pan. 189 checks.
 
+- **GAX 2 (feasibility, 2026-11-03): see docs/ENGINES.md "GAX 2 feasibility".** In short: V3's
+  sequencer inside handler structs; instruments at new offsets; SIGNED samples. Scratch tools (not in
+  the repo): gax2find.py (song entries), gax2v3.py (a test copy with V3 headers appended and the
+  version text changed so the scan accepts it), gax2exp.py (gax.c with V2 instrument offsets). Not
+  implemented in the player yet.
+
 ## Booting from a saved slot (patch v4, 2026-10-27)
 
 - **A save records the cart** (`cartTag` = `rom_cart_tag()`, plus `romVersion`/`romCheck` beside

@@ -5,6 +5,34 @@ and GAX are not yet. This document says what the engines share, what has to happ
 turns out to use one of them, and how the card stays one instrument with one UI whichever engine
 is playing. "As built" below records where the build differs from the design.
 
+## GAX 2 feasibility (2026-11-03)
+
+Studied on dumps of Tang Tang (2.01a), Spider-Man: Mysterio's Menace (2.01b), Tony Hawk's Pro Skater 3
+(2.11) and Bruce Lee: Return of the Legend (2.35), against loveemu's research note (V2 section).
+**Feasible: GAX 2 is GAX 3's sequencer with a different wrapping and instrument layout.**
+
+- **Top level, the same in all four versions:** a song entry is a count n >= 4 and n pointers to 7-word
+  handlers {three Thumb code pointers, a count, a pointer, a number, a data pointer}. Handler 1's data
+  is the song header; handlers 3.. are the channels, each one's data a pattern table. Found by
+  structure: 10 / 22 / 14 / 12 song entries.
+- **Header:** V3's first 26 bytes (channels .. mixing rate, FX slots), no channel pointers (they come
+  from the channel handlers), a trailing pointer from 2.3 on.
+- **Pattern tables and sequence data are V3's:** with a V3 header built from the pieces, the V3 decoder
+  reads whole songs with no error, and the notes are plausible (Bruce Lee song 1: channel 3 plays 100
+  notes on one instrument, channel 0 mostly instruments 1 and 11, a clean loop after 12 orders).
+- **Instruments are V3's fields at other offsets, one wave:** sample +1, vibrato +8..10, start / loop /
+  end +16 / +20 / +24, envelope pointer +124 (V3 envelope format), a second envelope +128 (one point
+  in the samples seen; V3 has none), performance speed / count +132 / +133, performance rows +136 (V3's
+  8-byte rows). +36 is a word that is sometimes a pointer, meaning unknown. Mapped in a scratch copy of
+  gax.c, all four versions play with no decoder error.
+- **Samples are SIGNED** (mean step 8-28 read signed against 37-83 unsigned; Finding Nemo's GAX 3 is
+  the reverse). The note's comment that samples are unsigned from GAX 2 on is wrong for these. The
+  sample table's entry 0 can be empty (address 0), which V3 discovery refuses.
+- **Still to do for real support:** discovery by handler structure (it needs Thumb pointers, so it is
+  its own pass), a V2 mode in gax.c (channel table pointers, the instrument offsets, the second
+  envelope and +36 understood or ignored), signed samples for V2 tables, and the levels (the scratch
+  renders run hot: Tony Hawk 3 at full scale on 12 % of samples, before the payload's half volume).
+
 ## Real carts (2026-11-03)
 
 Dumps of four of Andy's carts settled what the hardware reports could not:
