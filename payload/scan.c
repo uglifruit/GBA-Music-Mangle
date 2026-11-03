@@ -26,13 +26,19 @@ static void add_table(uint8_t method, uint32_t selectSong, uint32_t table);
 // windows is word-aligned: a word-by-word pass can find it by comparing each word with those four.
 // A 1024-bit filter on a hash of the word keeps that to a test per word; a full compare runs only
 // on the rare words that pass.
-typedef struct { const char *s; uint8_t len, engine; } Sniff;
+// A signature with `needs` counts only if that text follows it in the same printable run: Krawall's
+// player as Griptonite's Lemony Snicket carries it, "$Id: player.c,v 1.4 2003/03/19 23:12:15 seb
+// Exp" (seen in that cart, 2026-11-03; "seb" is Sebastian Kienzl, Krawall's author), with no
+// "Krawall" anywhere. "player.c" alone is too common a name to trust.
+typedef struct { const char *s; uint8_t len, engine; const char *needs; } Sniff;
 static const Sniff kSniff[] = {                     // in order of preference for g_engineInfo
-    { "GAX Sound Engine",  16, ENG_GAX     },
-    { "GAX ENGINE V",      12, ENG_GAX     },
-    { "Krawall",            7, ENG_KRAWALL },
-    { "Extended Module: ", 17, ENG_XM      },
+    { "GAX Sound Engine",  16, ENG_GAX,     0 },
+    { "GAX ENGINE V",      12, ENG_GAX,     0 },
+    { "Krawall",            7, ENG_KRAWALL, 0 },
+    { "$Id: player.c,v ",  16, ENG_KRAWALL, " seb " },
+    { "Extended Module: ", 17, ENG_XM,      0 },
 };
+#define SNIFF_RUN 80                                // how far a `needs` is looked for
 #define SNIFF_N ((int)(sizeof(kSniff) / sizeof(kSniff[0])))
 #define SNIFF_HASH(w) (((w) * 0x9E3779B1u) >> 22)
 static uint32_t s_sniffWord[SNIFF_N][4];
@@ -57,6 +63,19 @@ static void sniff_init(void)
     }
 }
 
+// Does the printable run at a (up to SNIFF_RUN bytes) contain text?
+static int run_has(uint32_t a, const char *text)
+{
+    for (unsigned i = 0; i < SNIFF_RUN && rom_ok(a + i, 1); i++) {
+        uint8_t c = rom_u8(a + i);
+        if (c < 0x20 || c > 0x7E) return 0;
+        unsigned j = 0;
+        while (text[j] && rom_ok(a + i + j, 1) && rom_u8(a + i + j) == (uint8_t)text[j]) j++;
+        if (!text[j]) return 1;
+    }
+    return 0;
+}
+
 // The word w at the aligned address a passed the filter: which signatures really start near it?
 static void sniff_hit(uint32_t a, uint32_t w)
 {
@@ -69,6 +88,7 @@ static void sniff_hit(uint32_t a, uint32_t w)
             unsigned i = 0;
             while (i < s->len && rom_u8(at + i) == (uint8_t)s->s[i]) i++;
             if (i < s->len) continue;
+            if (s->needs && !run_has(at + s->len, s->needs)) continue;
             g_engines |= s->engine;
             if (s->engine == ENG_XM && g_xmCount < 0xFFFF) g_xmCount++;
             if (p < s_infoFrom) {
@@ -461,18 +481,22 @@ int scan_run(ScanProgressFn progress, int full)
     prog_pass(0, 128);
     find_signature();
     int mp2k = drop_empty();
-    // Which other passes: the heuristic only without a signature table; GAX and Krawall when their
-    // text is in the cart; MusyX (which leaves no text) when nothing else turns up. FULL: all.
-    int heur = !mp2k;
+    // Which other passes: GAX and Krawall when their text is in the cart; the MP2K heuristic only
+    // without a signature table, and MusyX (which leaves no text) only if nothing turns up, and
+    // neither when the cart names GAX or Krawall (it uses that engine: since 2026-11-03, to save two
+    // whole passes on such carts). FULL runs every pass.
+    int named = (g_engines & (ENG_GAX | ENG_KRAWALL)) != 0;
+    int heur = !mp2k && (full || !named);
     int gax  = full || (g_engines & ENG_GAX);
     int krw  = full || (g_engines & ENG_KRAWALL);
-    int passes = heur + gax + krw + 1;                  // + MusyX, until we know it is not needed
+    int msx  = full || !named;                          // MusyX may run: counted until we know
+    int passes = heur + gax + krw + msx;
     static const uint8_t span[5] = { 128, 128, 64, 42, 32 };
     uint32_t base = 128, each = span[passes];
     if (heur) { prog_pass(base, each); find_heuristic(); drop_empty(); base += each; }
     if (gax)  { prog_pass(base, each); engine_pass(ENG_ID_GAX); drop_empty(); base += each; }
     if (krw)  { prog_pass(base, each); engine_pass(ENG_ID_KRAWALL); drop_empty(); base += each; }
-    if (full || g_tableCount == 0) { prog_pass(base, each); engine_pass(ENG_ID_MUSYX); drop_empty(); }
+    if (full || (msx && g_tableCount == 0)) { prog_pass(base, each); engine_pass(ENG_ID_MUSYX); drop_empty(); }
     if (progress) progress(256);
     note_engines();
     if (g_tableCount == 0) {

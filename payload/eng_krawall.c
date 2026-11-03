@@ -10,8 +10,13 @@
 //
 // Its seek silences the voices, so RESTART BAR returns to the section's order and row (and tick)
 // with the notes cut at the jump.
+//
+// SONGS. A module can hold several songs, split by 254 ("+++") in its order list (games keep
+// jingles and effects that way). Each is listed: a song number is module x 64 + song, and a module
+// with more than one plays its song in Krawall's song mode (loop or stop at the next marker).
 
 #include "eng_core.h"
+#include "gba.h"
 #include "player.h"
 #include "scan.h"
 #include "mod.h"
@@ -92,11 +97,20 @@ static void lanes(void)
     g_plTrackCount = (uint8_t)tc;
 }
 
-static int song_for(unsigned i, KrSong *s)
+#define KR_SONGS 64                         // songs per module (Krawall's songIndex holds 64)
+
+static int song_for(unsigned ix, KrSong *s)
 {
+    unsigned i = ix >> 6, k = ix & (KR_SONGS - 1);
     if (i >= s_d.module_count || s_sb < 0) return 0;
+    EngRom r = eng_cart_rom();
+    uint8_t starts[KR_SONGS];
+    unsigned n = kr_module_songs(&r, s_d.modules[i], s_d.formats[i], starts, 0, KR_SONGS);
+    if (k >= n) return 0;
     s->module = s_d.modules[i];
     s->format = s_d.formats[i];
+    s->start_order = starts[k];
+    s->song_mode = (uint8_t)(n > 1);
     s->samples = s_d.samples[s_sb].address;
     s->sample_count = s_d.samples[s_sb].count;
     s->instruments = s_ib >= 0 ? s_d.instruments[s_ib].address : 0;
@@ -146,10 +160,29 @@ static uint32_t tempo_i(void)
 
 static void diag(char *t, int a)
 {
+    // M modules, S/I the sample and instrument banks found, U unknown effects, E the decoder's error.
     t[a++] = ' '; t[a++] = 'M'; a = eng_put_hex(t, a, s_d.module_count, 2);
+    t[a++] = ' '; t[a++] = 'S'; a = eng_put_hex(t, a, s_d.sample_count, 1);
+    t[a++] = 'I'; a = eng_put_hex(t, a, s_d.instrument_count, 1);
     t[a++] = ' '; t[a++] = 'U'; a = eng_put_hex(t, a, s_kr.unsupported[0], 8);
     t[a++] = ' '; t[a++] = 'E'; t[a++] = s_kr.error ? '1' : '0';
     t[a] = 0;
+}
+
+static int put(char *t, int a, const char *s) { while (*s) t[a++] = *s++; t[a] = 0; return a; }
+
+// Hex counts: M modules, S/I sample and instrument banks, L pointer runs judged.
+int krw_scan_note(char *t)
+{
+    int a;
+    if (!s_d.module_count)        a = put(t, 0, "KRAWALL: NO MODULES");
+    else if (!s_d.sample_count)   a = put(t, 0, "KRAWALL: NO SAMPLE BANK");
+    else                          a = put(t, 0, "KRAWALL: NO INSTR BANK");
+    a = put(t, a, " M"); a = eng_put_hex(t, a, s_d.module_count, 2);
+    a = put(t, a, " S"); a = eng_put_hex(t, a, s_d.sample_count, 1);
+    a = put(t, a, "I");  a = eng_put_hex(t, a, s_d.instrument_count, 1);
+    a = put(t, a, " L"); eng_put_hex(t, a, s_d.lists, 3);
+    return 1;
 }
 
 static const EngCore s_core = {
@@ -175,10 +208,36 @@ void krw_discover_reset(void)
     s_sb = s_ib = -1;
 }
 
+// The pass's word loop, in IWRAM: it reads every word of the cart. A module is tried only where its
+// fixed fields can hold (channels 1..32, speed 1..31, BPM 32 or more, the five flags 0 or 1, the pad
+// byte 0: the words at +0, +356 and +360), and a run of pointers is judged as a bank when it ends.
+// It does what kr_discover_slice() does, without a function call per word.
+IWRAM_CODE static void kr_words(const EngRom *r, uint32_t begin, uint32_t end)
+{
+    const volatile uint32_t *p = (const volatile uint32_t *)ROM_PTR(begin);
+    uint32_t n = (end - begin) >> 2, base = r->base, size = r->size;
+    uint32_t lastModule = size >= 368 ? base + size - 368 : 0;
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t a = begin + (i << 2), w = p[i];
+        if (a <= lastModule) {
+            uint32_t f = p[i + 89], g = p[i + 90];
+            if (!(g & 0xFFFEFEFEu) && !(f & 0xFEFE0000u) && (uint8_t)(f - 1u) < 31u &&
+                ((f >> 8) & 0xFFu) >= 32u && (uint8_t)(w - 1u) < 32u)
+                kr_discover_module(&s_d, r, a);
+        }
+        if (w - base < size && w != 0x08080808u) {
+            if (!s_d.run_count++) s_d.run_start = a;
+            continue;
+        }
+        if (s_d.run_count) kr_discover_list(&s_d, r, s_d.run_start, s_d.run_count);
+        s_d.run_count = 0;
+    }
+}
+
 void krw_discover(uint32_t begin, uint32_t end)
 {
     EngRom r = eng_cart_rom();
-    kr_discover_slice(&s_d, &r, begin, end);
+    kr_words(&r, begin, end);
 }
 
 // The patch's bank if it is a candidate, else the largest.
@@ -194,13 +253,20 @@ static int pick(const KrBank *b, unsigned n, uint32_t want)
 
 void krw_discover_finish(void)
 {
+    if (s_d.run_count) {                           // a run that reached the cart's end
+        EngRom r = eng_cart_rom();
+        kr_discover_list(&s_d, &r, s_d.run_start, s_d.run_count);
+        s_d.run_count = 0;
+    }
     s_sb = pick(s_d.samples, s_d.sample_count, g_krBankWant[0]);
     s_ib = pick(s_d.instruments, s_d.instrument_count, g_krBankWant[1]);
     if (s_d.module_count && s_sb >= 0) scan_add_table(ENG_ID_KRAWALL, s_d.modules[0]);
 }
 
-// Every module the banks can serve (an instrument-based one needs an instrument bank). Kind from
-// one pass at its starting speed; Krawall modules loop to their restart order.
+// Every song of every module the banks can serve (an instrument-based one needs an instrument
+// bank). Kind from one pass at its starting speed: a module's only song loops to its restart order,
+// so it is music; of several, a short one is an effect and the rest music (Krawall's song mode
+// loops them; the game may play one once, which the data cannot say).
 int krw_table_songs(const ScanResult *t, uint16_t *ix, uint8_t *kind, int max)
 {
     (void)t;
@@ -209,8 +275,13 @@ int krw_table_songs(const ScanResult *t, uint16_t *ix, uint8_t *kind, int max)
     for (unsigned i = 0; i < s_d.module_count && k < max; i++) {
         uint32_t m = s_d.modules[i];
         if (s_sb < 0 || (rom_u8(m + 358) && s_ib < 0)) continue;
-        ix[k] = (uint16_t)i;
-        kind[k++] = eng_kind(kr_module_ticks(&r, m, s_d.formats[i]), 1);
+        uint8_t starts[KR_SONGS];
+        uint32_t ticks[KR_SONGS];
+        unsigned n = kr_module_songs(&r, m, s_d.formats[i], starts, ticks, KR_SONGS);
+        for (unsigned j = 0; j < n && k < max; j++) {
+            ix[k] = (uint16_t)((i << 6) | j);
+            kind[k++] = eng_kind(ticks[j], n == 1 || ticks[j] >= KIND_SFX_TICKS);
+        }
     }
     return k;
 }

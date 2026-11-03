@@ -32,12 +32,16 @@ rather than a game, so they will normally report no music.
 ### Other engines
 
 Not every game uses Nintendo's engine, and a cart can use more than one. The scan always looks for
-MP2K. It looks for **GAX** and **Krawall** when their names are written in the cart (they always
-are, in games that use them), and for **MusyX** (which leaves no name) when nothing else turns up.
-Each engine's songs are a SONG TABLE of their own, so a cart with MP2K and GAX shows two; the
-result screen lists the engines found ("MP2K + GAX"), and the PLAY page shows the engine beside the
-song number. SET > RESCAN CART can be switched to FULL (LEFT/RIGHT) to look for every engine
-whatever the cart says.
+MP2K. It looks for **GAX** and **Krawall** when their names are written in the cart (GAX's always
+is; Krawall's is its name or its author's signature in the player's source line), and for **MusyX**
+(which leaves no name) when nothing else turns up. A cart that names GAX or Krawall skips the
+MP2K backup search and MusyX, so its scan is quicker. Each engine's songs are a SONG TABLE of
+their own, so a cart with MP2K and GAX shows two; the result screen lists the engines found ("MP2K
++ GAX"), and the PLAY page shows the engine beside the song number. SET > RESCAN CART can be
+switched to FULL (LEFT/RIGHT) to look for every engine whatever the cart says.
+
+A Krawall module can hold several songs (games keep jingles and effects that way): each is listed
+on its own, and plays until the next one would begin, then loops (or stops, as an effect).
 
 Everything works the same on every engine: cue and PLAY, the clock and clock out, REPEAT BAR, AT
 BAR END, transpose, fine pitch, tempo, mutes, layers, solo, voice shift, table offset, sample
@@ -54,8 +58,8 @@ engine row gives each engine's own diagnostics; note it when reporting a song:
 | Engine | CAL row | Means |
 |---|---|---|
 | GAX | `S` songs, `OLD` how many the first, stricter scan would have kept, `FX` effect banks, then the check that turned away the most near-misses (`SHP` shape, `NOT` notes, `INS` instruments, `SMP` samples, `CHN` channels) | Tells a cart with few songs found where the rest went. `2.X UNSUPPORTED`: the cart's GAX is version 2, whose songs this can't read yet |
-| Krawall | `M` modules, unknown effects, error | Two more rows choose its **sample and instrument banks**: Krawall stores them apart from the songs, and the scan takes the largest of each. UP/DOWN picks the row, LEFT/RIGHT steps through the other candidates; the choice is saved with the patch |
-| MusyX | unknown commands, warnings, error | |
+| Krawall | `M` modules, `S`/`I` the sample and instrument banks found, unknown effects, error | Two more rows choose its **sample and instrument banks**: Krawall stores them apart from the songs, and the scan takes the largest of each. UP/DOWN picks the row, LEFT/RIGHT steps through the other candidates; the choice is saved with the patch |
+| MusyX | unknown commands, warnings, `R` why notes were turned away (1 no voices, 2 no such instrument, 4 bad sample, 8 bad macro or keymap), error, `PSG` | `PSG`: the song asks for the Game Boy sound channels for some parts (square waves, noise). Those parts are silent for now: only sampled parts play |
 
 ### "No music found that it can play"
 
@@ -68,8 +72,9 @@ When no engine's songs are found, the scan says what the cart uses instead, and 
 | ENGINE: XM x*n* | *n* whole FastTracker 2 modules stored in the cart, with the first one's name. |
 | ENGINE UNKNOWN | No known signature: an in-house engine, or one that leaves no text behind. |
 
-A GAX or Krawall name with no songs found means their data didn't match what this player reads
-(see the CAL row above). XM modules and unnamed engines don't play. If a game you know uses MP2K
+A GAX or Krawall name with no songs found adds a red line saying why: "GAX 2.X: NOT SUPPORTED YET"
+(GAX version 2, as in Tang Tang, stores its songs differently), or what the Krawall search found
+("NO SAMPLE BANK", with its counts). XM modules and unnamed engines don't play. If a game you know uses MP2K
 reports nothing, try SET > CART SPEED SAFE and SET > RESCAN CART. The CAL page repeats the engine
 line. [docs/ENGINES.md](docs/ENGINES.md) has how the engines fit together.
 

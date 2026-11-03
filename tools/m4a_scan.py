@@ -44,12 +44,15 @@ CMD_ONE_ARG = {0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF, 0xC0, 0xC1, 0xC2, 0xC3, 0xC4,
 SELECT_SONG_TABLE_OFF = 40
 # Other engines' signatures (scan.h, "OTHER ENGINES"): text, engine name. In order of preference
 # for the info line.
+# (signature, engine, text that must follow it in the same printable run): scan.c's kSniff.
 SNIFF = [
-    (b'GAX Sound Engine', 'GAX'),
-    (b'GAX ENGINE V', 'GAX'),
-    (b'Krawall', 'KRAWALL'),
-    (b'Extended Module: ', 'XM'),
+    (b'GAX Sound Engine', 'GAX', None),
+    (b'GAX ENGINE V', 'GAX', None),
+    (b'Krawall', 'KRAWALL', None),
+    (b'$Id: player.c,v ', 'KRAWALL', b' seb '),
+    (b'Extended Module: ', 'XM', None),
 ]
+SNIFF_RUN = 80
 ENGINE_INFO_LEN = 38
 M4A_RATES = [5734, 7884, 10512, 13379, 15768, 18157, 21024, 26758, 31536, 36314, 40137, 42048]
 
@@ -139,17 +142,19 @@ class Sniff:
         # each signature's first four 4-byte windows: whichever is word-aligned is what a
         # word-by-word pass sees
         self.words = {}
-        for p, (sig, _) in enumerate(SNIFF):
+        for p, (sig, _, _) in enumerate(SNIFF):
             for k in range(4):
                 self.words.setdefault(struct.unpack_from('<I', sig, k)[0], []).append((p, k))
 
     def hit(self, rom, a, w):
         for p, k in self.words.get(w, ()):
-            sig, name = SNIFF[p]
+            sig, name, needs = SNIFF[p]
             at = a - k
             if a - ROM_BASE < k or not rom.ok(at, len(sig)):
                 continue
             if rom.data[at - ROM_BASE:at - ROM_BASE + len(sig)] != sig:
+                continue
+            if needs and not run_has(rom, at + len(sig), needs):
                 continue
             if name not in self.engines:
                 self.engines.append(name)
@@ -161,6 +166,16 @@ class Sniff:
                 while n < ENGINE_INFO_LEN and rom.ok(at + n, 1) and 0x20 <= rom.u8(at + n) <= 0x7E:
                     n += 1
                 self.info = rom.data[at - ROM_BASE:at - ROM_BASE + n].decode('ascii').rstrip(' ')
+
+
+def run_has(rom, a, text):
+    """Does the printable run at a (up to SNIFF_RUN bytes) contain text? scan.c's run_has."""
+    for i in range(SNIFF_RUN):
+        if not rom.ok(a + i, 1) or not 0x20 <= rom.u8(a + i) <= 0x7E:
+            return False
+        if rom.data[a + i - ROM_BASE:a + i - ROM_BASE + len(text)] == text:
+            return True
+    return False
 
 
 def sniff_all(rom, sniff):
@@ -333,6 +348,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('rom')
     ap.add_argument('--songs', action='store_true', help='list every playable song')
+    ap.add_argument('--full', action='store_true', help='run every pass, as SET > RESCAN = FULL')
     args = ap.parse_args()
 
     with open(args.rom, 'rb') as f:
@@ -360,14 +376,16 @@ def main():
         return kept
 
     # The sniff rides on the signature pass, so it always runs; the heuristic runs when the
-    # signature found no table with a playable song - none at all, or only false positives. (The
-    # GBA then also runs the other engines' discovery: pcplay links that same C, this does not.)
+    # signature found no table with a playable song - none at all, or only false positives - and
+    # the cart names neither GAX nor Krawall (FULL: whatever it names). (The GBA then also runs the
+    # other engines' discovery: pcplay links that same C, this does not.)
     sniff = Sniff()
     tables = []
     add_tables([('SIGNATURE', s, t) for s, t in find_signatures(rom)], tables)
     sniff_all(rom, sniff)
     kept = drop_empty(tables)
-    if not kept:
+    named = any(e in sniff.engines for e in ('GAX', 'KRAWALL'))
+    if not kept and (args.full or not named):
         tables = []
         add_tables([('HEURISTIC', 0, t) for t in find_heuristic(rom)], tables)
         kept = drop_empty(tables)

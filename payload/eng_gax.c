@@ -10,6 +10,7 @@
 // RESTART BAR is "back to the order and row the section began on" with the notes cut at the jump.
 
 #include "eng_core.h"
+#include "gba.h"
 #include "player.h"
 #include "scan.h"
 #include "mod.h"
@@ -203,6 +204,23 @@ static void diag(char *t, int a)
     t[a] = 0;
 }
 
+static int put(char *t, int a, const char *s) { while (*s) t[a++] = *s++; t[a] = 0; return a; }
+
+int gx_scan_note(char *t)
+{
+    if (s_v2) { put(t, 0, "GAX 2.X: NOT SUPPORTED YET"); return 1; }
+    int a = put(t, 0, "GAX: NO SONGS MATCHED");
+    unsigned top = 0;
+    for (unsigned k = GX_REJECT_SHAPE; k < GX_REJECT_COUNT; k++) if (s_stats.count[k] > s_stats.count[top]) top = k;
+    if (top) {
+        static const char *stage[GX_REJECT_COUNT] = { "", "", "", "SHP", "NOT", "INS", "SMP", "CHN" };
+        a = put(t, a, " ");
+        a = put(t, a, stage[top]);
+        eng_put_hex(t, a, s_stats.count[top], 3);
+    }
+    return 1;
+}
+
 static const EngCore s_core = {
     start, stop, running, tick, loops, snap_take, snap_restore, restart_loop, lanes, sync, tempo_i, diag,
 };
@@ -227,12 +245,38 @@ void gx_discover_reset(void)
     for (int k = 0; k < GX_REJECT_COUNT; k++) s_stats.count[k] = 0;
 }
 
+// A word that passed the loop's test: classified and counted as gx_scan_stats() does.
+static void gx_candidate(const EngRom *r, uint32_t a)
+{
+    int k = gx_header_kind(r, a);
+    if (k == GX_HDR_SONG && s_songCount < GX_MAX_SONGS) s_songs[s_songCount++] = a;
+    if (k > 0 && k < GX_REJECT_COUNT) s_stats.count[k]++;
+}
+
+// The pass's word loop, in IWRAM: it reads every word of the cart. The full check runs only where a
+// header could start: a channel count of 32 or less, the reserved +0x1E zero, and an instrument or
+// sample pointer into the cart (every song and FX header has both). The near-miss counts therefore
+// cover only candidates with one of those pointers (all of them before 2026-11-03).
+IWRAM_CODE static void gx_words(const EngRom *r, uint32_t begin, uint32_t end)
+{
+    uint32_t base = r->base, size = r->size;
+    if (size < 32) return;
+    uint32_t stop = base + size - 28;                   // a header needs 32 bytes from a
+    if (end > stop) end = stop;
+    if (end <= begin) return;
+    const volatile uint32_t *p = (const volatile uint32_t *)ROM_PTR(begin);
+    uint32_t n = (end - begin) >> 2;
+    for (uint32_t i = 0; i < n; i++) {
+        if ((p[i] & 0xFFFFu) > 32u || (p[i + 7] >> 16)) continue;
+        if (p[i + 4] - base >= size && p[i + 5] - base >= size) continue;
+        gx_candidate(r, begin + (i << 2));
+    }
+}
+
 void gx_discover(uint32_t begin, uint32_t end)
 {
-    if (s_songCount >= GX_MAX_SONGS) return;
     EngRom r = eng_cart_rom();
-    s_songCount = (uint16_t)(s_songCount + gx_scan_stats(&r, begin, end, s_songs + s_songCount,
-                                                          GX_MAX_SONGS - s_songCount, &s_stats));
+    gx_words(&r, begin, end);
 }
 
 // The version the sniff read ("GAX Sound Engine 3.05", "GAX ENGINE V3.05"): 2.x uses another

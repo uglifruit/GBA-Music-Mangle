@@ -223,6 +223,20 @@ int eng_put_hex(char *t, int a, uint32_t v, int digits)
     return a;
 }
 
+static int has_table(uint8_t id)
+{
+    for (int i = 0; i < g_tableCount; i++) if (g_tables[i].engine == id) return 1;
+    return 0;
+}
+
+int eng_scan_note(char *t)
+{
+    t[0] = 0;
+    if ((g_engines & ENG_GAX) && !has_table(ENG_ID_GAX) && gx_scan_note(t)) return 1;
+    if ((g_engines & ENG_KRAWALL) && !has_table(ENG_ID_KRAWALL) && krw_scan_note(t)) return 1;
+    return 0;
+}
+
 void eng_diag(char *t)
 {
     int a = 0;

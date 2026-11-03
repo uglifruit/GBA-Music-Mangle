@@ -88,3 +88,6 @@ int  eng_kr_bank_apply(void);
 
 // One diagnostic line for the CAL page (engine name, then whatever it reports), <= 38 chars.
 void eng_diag(char *out);
+// Why a cart that names GAX or Krawall got no table of theirs, for the scan's result screen
+// ("GAX 2.X: NOT SUPPORTED YET", "KRAWALL: NO SAMPLE BANK M03"). 0 (and out empty) if nothing to say.
+int eng_scan_note(char *out);

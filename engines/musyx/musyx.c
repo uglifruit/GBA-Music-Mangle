@@ -21,10 +21,13 @@ static unsigned table_count(const MsRom *r,uint32_t root,uint32_t table){
     uint32_t first=relative(r,root,table,1);if(first<=table||(first-table)&3)return 0;
     unsigned count=(first-table)/4;return count<=1024?count:0;
 }
+// A sample header: size, loop (-1 none), rate u16, root key u8 at +10. The byte at +11 is not part of
+// the root: Harry Potter and the Chamber of Secrets sets it to 1 on its tiny waveform samples (seen
+// 2026-11-03), and a u16 read (316) turned the whole root away.
 static int sample_valid(const MsRom *r,uint32_t a){
     if(!ok(r,a,16))return 0;
     uint32_t size=w(r,a);int32_t loop=(int32_t)w(r,a+4);
-    return size&&size<0x1000000&&ok(r,a+16,size)&&(loop<0||(uint32_t)loop<=size)&&h(r,a+8)>=1000&&h(r,a+8)<=48000&&h(r,a+10)<=127;
+    return size&&size<0x1000000&&ok(r,a+16,size)&&(loop<0||(uint32_t)loop<=size)&&h(r,a+8)>=1000&&h(r,a+8)<=48000&&b(r,a+10)<=127;
 }
 int ms_root_valid(const MsRom *r,uint32_t root){
     if((root&3)||!ok(r,root,32))return 0;
@@ -92,7 +95,7 @@ static unsigned random8(MsPlayer *p){p->rng^=p->rng<<13;p->rng^=p->rng>>17;p->rn
 static void off(MsPlayer *p,unsigned i){p->voices[i].active=p->voices[i].has_sample=0;if(p->hooks.stop)p->hooks.stop(p->hooks.user,i);}
 void ms_stop(MsPlayer *p){for(unsigned i=0;i<MS_VOICES;++i)off(p,i);for(unsigned i=0;i<16;++i)p->tracks[i].gate=0;p->running=0;event(p,MS_EVENT_STOP,0);}
 static int fail(MsPlayer *p,uint32_t address){p->error=1;ms_stop(p);event(p,MS_EVENT_BAD_DATA,address);return 0;}
-static void reject(MsPlayer *p,unsigned i,uint32_t address){++p->rejected;p->warnings|=MS_WARN_REJECTED_VOICE;off(p,i);event(p,MS_EVENT_BAD_DATA,address);}
+static void reject(MsPlayer *p,unsigned i,unsigned why,uint32_t address){++p->rejected;p->why|=(uint8_t)why;p->warnings|=MS_WARN_REJECTED_VOICE;off(p,i);event(p,MS_EVENT_BAD_DATA,address);}
 static int unsupported(MsPlayer *p,unsigned i,unsigned op){p->last_opcode=op;if(op<64)p->unsupported[op>>5]|=1u<<(op&31);else p->unsupported[1]|=1u<<30;event(p,MS_EVENT_UNSUPPORTED,op);if(!p->preview){off(p,i);return 0;}return 1;}
 void ms_init(MsPlayer *p,MsRom r,const MsHooks *hooks){
     zero(p,sizeof(*p));p->rom.data=r.data;p->rom.base=r.base;p->rom.size=r.size;
@@ -116,9 +119,13 @@ int ms_start(MsPlayer *p,const MsSong *requested){
     MsSong song;if(!requested||!ms_song_info(&p->rom,requested->root,requested->index,&song))return 0;
     const MsRom *r=&p->rom;uint32_t tracks=relative(r,song.song,song.song,68),patterns=relative(r,song.song,song.song+4,4);
     unsigned bpm=h(r,song.song+8);if(!tracks||!patterns||bpm<20||bpm>400)return 0;
-    ms_stop(p);if(!bind(p,song.root))return 0;zero(p->tracks,sizeof(p->tracks));zero(p->voices,sizeof(p->voices));zero(p->unsupported,sizeof(p->unsupported));
+    ms_stop(p);if(!bind(p,song.root))return 0;zero(p->tracks,sizeof(p->tracks));zero(p->voices,sizeof(p->voices));zero(p->unsupported,sizeof(p->unsupported));p->why=0;
     p->song.root=song.root;p->song.group=song.group;p->song.song=song.song;p->song.index=song.index;
     p->patterns=patterns;p->bpm=(uint16_t)bpm;p->ticks=0;p->error=0;p->warnings=0;p->rejected=0;p->last_opcode=UINT32_MAX;p->running=1;
+    // A song group opens with 16 bytes, one per MIDI channel: the channel's starting program (an index
+    // into the group's sound list). Seen on Denki Blocks and BattleBots (2026-11-03): their songs send
+    // no program changes, so starting every channel on program 0 played every part with one sound.
+    for(unsigned c=0;c<16;++c)p->tracks[c].program=(uint8_t)(b(r,song.group+c)&127);
     for(unsigned c=0;c<17;++c){MsTrack *t=&p->tracks[c];uint32_t a=relative(r,song.song,tracks+c*4,8);
         if(!a){t->ended=1;continue;}t->entries=a;if(!load_entry(p,t,a,0,0))return 0;}
     return 1;
@@ -141,28 +148,28 @@ static int valid_pcm(MsPlayer *p,MsPcm *v){return v->size&&v->size<=MS_MAX_SAMPL
     (v->loop==MS_NOLOOP||v->loop<v->size)&&v->step&&v->step<=0x200000&&v->left<=255&&v->right<=255;}
 static int start_sample(MsPlayer *p,unsigned i,unsigned id,uint32_t start){
     MsVoice *v=&p->voices[i];const MsRom *r=&p->rom;
-    if(id>=p->sample_count){reject(p,i,p->samples);return 0;}
+    if(id>=p->sample_count){reject(p,i,MS_WHY_SAMPLE,p->samples);return 0;}
     uint32_t a=relative(r,p->song.root,p->samples+id*4,16);
-    if(!a||!sample_valid(r,a)){reject(p,i,a);return 0;}
+    if(!a||!sample_valid(r,a)){reject(p,i,MS_WHY_SAMPLE,a);return 0;}
     uint32_t size=w(r,a),data=a+16;int32_t loop=(int32_t)w(r,a+4);
-    if(size>MS_MAX_SAMPLE){reject(p,i,a);return 0;}
+    if(size>MS_MAX_SAMPLE){reject(p,i,MS_WHY_SAMPLE,a);return 0;}
     size-=(size*p->mods.sample_end)>>8;
-    data+=(uint32_t)p->mods.scrub;if(!size||!ok(r,data,size+1)){reject(p,i,data);return 0;}
+    data+=(uint32_t)p->mods.scrub;if(!size||!ok(r,data,size+1)){reject(p,i,MS_WHY_SAMPLE,data);return 0;}
     v->pcm.data=data;v->pcm.size=size;v->pcm.loop=loop>=0&&(uint32_t)loop<size?(uint32_t)loop:MS_NOLOOP;
     uint32_t extra=(size*p->mods.sample_start)>>8;
     v->pcm.start=start>=size||extra>=size-start?size-1:start+extra;
     v->pcm.reverse=(uint8_t)(random8(p)<p->mods.reverse_chance);
-    v->sample_rate=h(r,a+8);v->root_note=h(r,a+10);levels(p,i);
+    v->sample_rate=h(r,a+8);v->root_note=b(r,a+10);levels(p,i);
     if(p->hooks.note)p->hooks.note(p->hooks.user,i,&v->pcm);
-    if(!valid_pcm(p,&v->pcm)){reject(p,i,data);return 0;}
+    if(!valid_pcm(p,&v->pcm)){reject(p,i,MS_WHY_SAMPLE,data);return 0;}
     v->has_sample=1;if(p->hooks.start)p->hooks.start(p->hooks.user,i,&v->pcm);return 1;
 }
 static int macro_select(MsPlayer *p,unsigned i,unsigned id){
     MsVoice *v=&p->voices[i];const MsRom *r=&p->rom;
     uint32_t entry=p->macros+id*4u+(int32_t)p->mods.table_offset;
-    if(id>=p->macro_count||!ok(r,entry,4)){reject(p,i,entry);return 0;}
+    if(id>=p->macro_count||!ok(r,entry,4)){reject(p,i,MS_WHY_MACRO,entry);return 0;}
     uint32_t a=relative(r,p->song.root,entry,5);
-    if(!a){reject(p,i,entry);return 0;}
+    if(!a){reject(p,i,MS_WHY_MACRO,entry);return 0;}
     uint32_t end=r->base+r->size;
     // Normal tables are ordered, but aliased/last macros can lack a reliable upper bound.
     if(id+1<p->macro_count){uint32_t next=relative(r,p->song.root,p->macros+(id+1)*4,1);if(next>a)end=next;}
@@ -173,7 +180,7 @@ static int macro_select(MsPlayer *p,unsigned i,unsigned id){
         if(!p->preview||!ok(r,a+4,2)){unsupported(p,i,54);off(p,i);return 0;}
         if(!unsupported(p,i,54))return 0;
         unsigned count=h(r,a+4);uint32_t item=a+6+v->note*8u;
-        if(v->note>=count||!ok(r,item,8)){reject(p,i,item);return 0;}
+        if(v->note>=count||!ok(r,item,8)){reject(p,i,MS_WHY_MACRO,item);return 0;}
         v->pitch=(int16_t)h(r,item+2);v->ip=0;v->tail=1;return start_sample(p,i,h(r,item),0);
     }
     v->ip=a+4;return 1;
@@ -188,7 +195,8 @@ static void note_on(MsPlayer *p,unsigned c,unsigned note,unsigned velocity,unsig
     if(random8(p)<p->mods.drop_chance)return;
     unsigned program=t->program&127;uint32_t list=p->song.group+16+(c==9?512:0)+program*4;
     int id=(int)h(&p->rom,list)+p->mods.voice_shift;
-    if(!b(&p->rom,list+3)||id<0||id>=p->macro_count){++p->rejected;p->warnings|=MS_WARN_REJECTED_VOICE;return;}
+    if(!b(&p->rom,list+3)||id<0||id>=p->macro_count){++p->rejected;p->warnings|=MS_WARN_REJECTED_VOICE;
+        p->why|=(uint8_t)(!b(&p->rom,list+3)?MS_WHY_NO_VOICES:MS_WHY_PROGRAM);return;}
     int choice=-1;uint32_t age=UINT32_MAX;
     for(unsigned i=0;i<MS_VOICES;++i){
         if(p->voices[i].active&&p->voices[i].has_sample&&p->hooks.done&&p->hooks.done(p->hooks.user,i))off(p,i);
@@ -207,9 +215,9 @@ static void macro_run(MsPlayer *p,unsigned i){
     if(v->tail||!v->ip)return;
     if(v->wait){if(v->wait==65535)return;--v->wait;if(v->wait)return;}
     for(unsigned budget=0;budget<64&&v->active;++budget){
-        uint32_t from=v->ip;if(from<v->macro_begin||from>=v->macro_end||!ok(r,from,1)){reject(p,i,from);return;}
+        uint32_t from=v->ip;if(from<v->macro_begin||from>=v->macro_end||!ok(r,from,1)){reject(p,i,MS_WHY_MACRO,from);return;}
         unsigned op=b(r,from);if(op>=54){unsupported(p,i,op);off(p,i);return;}
-        unsigned length=ms_macro_lengths[op];if(length>v->macro_end-from||!ok(r,from,length)){reject(p,i,from);return;}
+        unsigned length=ms_macro_lengths[op];if(length>v->macro_end-from||!ok(r,from,length)){reject(p,i,MS_WHY_MACRO,from);return;}
         v->ip+=length;
         switch(op){
         case 0:case 1:
@@ -224,14 +232,14 @@ static void macro_run(MsPlayer *p,unsigned i){
             if(b(r,from+1)&&!unsupported(p,i,op))return;
             if(!start_sample(p,i,h(r,from+2),w(r,from+4)))return;
             break;
-        case 16:v->keyoff=branch(from,(int32_t)w(r,from+2));if(v->keyoff<v->macro_begin||v->keyoff>=v->macro_end){reject(p,i,v->keyoff);return;}break;
+        case 16:v->keyoff=branch(from,(int32_t)w(r,from+2));if(v->keyoff<v->macro_begin||v->keyoff>=v->macro_end){reject(p,i,MS_WHY_MACRO,v->keyoff);return;}break;
         case 17:v->keyoff=0;break;
         case 23:case 24:case 25:{unsigned threshold=b(r,from+1),value=op==23?v->note:op==24?v->velocity:random8(p);
             if(threshold>=value)v->ip=branch(from,(int32_t)w(r,from+2));
             break;}
         case 29:
             if(!unsupported(p,i,op))return;
-            if(++v->chains>4){reject(p,i,from);return;}
+            if(++v->chains>4){reject(p,i,MS_WHY_MACRO,from);return;}
             p->warnings|=MS_WARN_PREVIEW_CHAIN;v->pitch=clip(v->pitch+(int16_t)h(r,from+4)-60*256,-32768,32767);
             if(!macro_select(p,i,h(r,from+2)))return;
             break;
@@ -241,7 +249,7 @@ static void macro_run(MsPlayer *p,unsigned i){
         default:if(!unsupported(p,i,op))return;break; // preview skips only a known, checked byte length
         }
     }
-    if(v->active){reject(p,i,v->ip);p->unsupported[1]|=1u<<31;}
+    if(v->active){reject(p,i,MS_WHY_MACRO,v->ip);p->unsupported[1]|=1u<<31;}
 }
 static int process_track(MsPlayer *p,unsigned c){
     MsTrack *t=&p->tracks[c];const MsRom *r=&p->rom;unsigned budget=64;
@@ -308,6 +316,6 @@ int ms_audition_sample(MsPlayer *p,uint32_t root,unsigned sample){
     uint32_t samples=relative(&p->rom,root,root+28,4);
     if(sample>=table_count(&p->rom,root,samples))return 0;
     ms_stop(p);if(!bind(p,root))return 0;zero(&p->voices[0],sizeof(MsVoice));MsVoice *v=&p->voices[0];v->active=1;v->owner=0;v->velocity=v->volume=100;
-    uint32_t a=relative(&p->rom,root,p->samples+sample*4,16);if(!a){off(p,0);return 0;}v->pitch=(int32_t)h(&p->rom,a+10)*256;
+    uint32_t a=relative(&p->rom,root,p->samples+sample*4,16);if(!a){off(p,0);return 0;}v->pitch=(int32_t)b(&p->rom,a+10)*256;
     return start_sample(p,0,sample,0);
 }

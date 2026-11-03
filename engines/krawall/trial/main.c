@@ -51,7 +51,7 @@ static void screen(void){
 static void begin(void){
     paused=1;kr_stop(&player);accumulator=0;
     if(!found.module_count||!found.sample_count)return;
-    KrSong song;
+    KrSong song={0};
     song.module=found.modules[module_ix];song.format=found.formats[module_ix];
     song.samples=found.samples[sample_ix].address;song.sample_count=found.samples[sample_ix].count;
     song.instruments=found.instrument_count?found.instruments[instrument_ix].address:0;

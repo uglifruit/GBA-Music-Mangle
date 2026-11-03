@@ -183,6 +183,30 @@ static void engine_checks(const char *path, uint8_t engine)
           g_eng->running(), g_plTrackCount);
 }
 
+// Songs inside a Krawall module (2026-11-03): mkengines.py's krawall2.gba holds two (order list 0,
+// +++, 1) with its restart past the list, an instrument with no envelope points, a junk sample-map
+// byte and a sample panned past +-64, all things real carts have that the first discovery refused.
+static void krawall_songs_checks(const char *path)
+{
+    if (!load_cart(path)) return;
+    mod_set_list(0, LIST_ALL);
+    CHECK(g_scan.engine == ENG_ID_KRAWALL && g_songCount == 2 && g_songIx[0] == 0 && g_songIx[1] == 1,
+          "krawall2: %u songs (ix %u %u), want the module's 2 songs", g_songCount, g_songIx[0], g_songIx[1]);
+    CHECK(g_songKind[0] == KIND_SFX && g_songKind[1] == KIND_MUSIC,
+          "krawall2 kinds %u %u: the 8-row song is an effect, the 64-row one music", g_songKind[0], g_songKind[1]);
+    play(0);
+    CHECK(sounding() >= 0, "krawall2 song 1 sounds (its key's sample-map entry has a junk high byte)");
+    for (int i = 0; i < 60; i++) g_eng->tick();
+    CHECK(!g_eng->running(), "krawall2 song 1, an effect, stops at its +++ marker");
+    play(1);
+    CHECK(sounding() >= 0, "krawall2 song 2 sounds (an instrument with no envelope points)");
+    uint8_t loops = g_plLoops;
+    for (int i = 0; i < 400; i++) g_eng->tick();
+    CHECK(g_eng->running() && (uint8_t)(g_plLoops - loops) >= 1,
+          "krawall2 song 2 loops to its own start (running %d, loops +%u)", g_eng->running(), (uint8_t)(g_plLoops - loops));
+    g_eng->stop();
+}
+
 // A cart with MP2K and GAX: a table each (the MP2K test cart has two of its own), and switching
 // table switches engine.
 static void mixed_checks(void)
@@ -715,7 +739,7 @@ int main(int argc, char **argv)
     // 12. The other engines (2026-10-29, 2026-11-01): each cart after the first is scanned, its table
     //     selects its engine, and the transport, the sections, the outputs and CHAOS work through
     //     engine.c exactly as they do on MP2K. modtest TEST.gba MUSYX.gba GAX.gba KRAWALL.gba MIXED.gba
-    //     (make_demo.py's MusyX cart, mkengines.py's others).
+    //     KRAWALL2.gba (make_demo.py's MusyX cart, mkengines.py's others).
     // 11b. Song or effect, by content (2026-11-01): mktestrom's melodies loop (MUSIC); its PSG effect
     //      is short and loops on an effects player (SFX, MP2K's one use of the player number).
     {
@@ -743,6 +767,7 @@ int main(int argc, char **argv)
     static const uint8_t want[3] = { ENG_ID_MUSYX, ENG_ID_GAX, ENG_ID_KRAWALL };
     for (int c = 0; c < 3 && argc > 2 + c; c++) engine_checks(argv[2 + c], want[c]);
     if (argc > 5 && load_cart(argv[5])) mixed_checks();
+    if (argc > 6) krawall_songs_checks(argv[6]);
 
     printf("modtest: %d passed, %d failed  (Patch is %u bytes)\n", s_pass, s_fail, (unsigned)sizeof(Patch));
     return s_fail ? 1 : 0;

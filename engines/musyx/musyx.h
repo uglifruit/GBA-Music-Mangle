@@ -20,6 +20,12 @@ extern "C" {
 #define MS_WARN_PREVIEW_CHAIN 4u
 #define MS_WARN_VOICE_LIMIT 8u
 #define MS_WARN_REJECTED_VOICE 16u
+// Why voices were rejected (MsPlayer.why, a mask): the program's sound-list entry allows no voices,
+// names a macro past the table, a sample failed its checks, a macro ran off its range/budget.
+#define MS_WHY_NO_VOICES 1u
+#define MS_WHY_PROGRAM 2u
+#define MS_WHY_SAMPLE 4u
+#define MS_WHY_MACRO 8u
 
 typedef EngRom MsRom;
 typedef struct {uint32_t root,song,group;uint16_t index;} MsSong;
@@ -47,7 +53,7 @@ typedef struct {
     uint32_t macros,samples,song_table,patterns,ticks,loops,rng,age;
     uint32_t unsupported[2],warnings,rejected,last_opcode;
     uint16_t macro_count,sample_count,song_count,bpm;
-    uint8_t running,error,repeat,preview;
+    uint8_t running,error,repeat,preview,why;
 } MsPlayer;
 void ms_init(MsPlayer *,MsRom,const MsHooks *);
 int ms_root_valid(const MsRom *,uint32_t root);

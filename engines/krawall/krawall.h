@@ -23,6 +23,10 @@ typedef struct {
     uint32_t module, samples, instruments;
     uint16_t sample_count, instrument_count;
     uint8_t format; // KR_2003: byte row count, no extended instrument byte
+    // A module can hold several songs, split by 254 ("+++") in its order list. song_mode plays the
+    // one starting at start_order and loops it (or stops) at the next marker, as Krawall's own
+    // KRAP_MODE_SONG does; 0 plays the whole order list and restarts at the module's restart order.
+    uint8_t start_order, song_mode;
 } KrSong;
 typedef EngVoice KrVoice; // Q12 step at 16384 Hz; left/right 0..255 after envelope and mute
 // Callback pointers are copied at init; user/context and ROM must outlive the player. `note` may
@@ -54,7 +58,7 @@ typedef struct {
     uint32_t stream, pattern, ticks, beats, loops, rng;
     uint32_t unsupported[2]; // bit n identifies an encountered unimplemented effect n
     uint16_t order, row, rows, tick, bpm, speed, pending_order, pending_row;
-    uint8_t channels, orders, restart, global_volume, instrument_based;
+    uint8_t channels, orders, restart, global_volume, instrument_based, song_mode;
     uint8_t running, repeat, error, format;
 } KrPlayer;
 
@@ -64,7 +68,11 @@ int kr_module_valid(const KrRom *, uint32_t module, uint8_t format);
 // Candidates are structural, not proof of an associated sample bank. Supply banks explicitly.
 unsigned kr_scan(const KrRom *, uint32_t begin, uint32_t end, uint8_t format,
                  uint32_t *modules, unsigned capacity);
-uint32_t kr_module_ticks(const KrRom *, uint32_t module, uint8_t format); // one pass, tracker ticks
+uint32_t kr_module_ticks(const KrRom *, uint32_t module, uint8_t format);
+// The songs in a module: each one's first order (0, then the order after each run of 254s), at
+// most cap. ticks (may be 0) gets each one's length to its marker or the end, as kr_module_ticks.
+unsigned kr_module_songs(const KrRom *, uint32_t module, uint8_t format, uint8_t *starts,
+                         uint32_t *ticks, unsigned cap); // one pass, tracker ticks
 int kr_start(KrPlayer *, const KrSong *);
 void kr_stop(KrPlayer *);
 void kr_tick(KrPlayer *);   // exactly ONE tracker tick (normally 24 ticks/beat)

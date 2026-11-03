@@ -946,7 +946,8 @@ void ui_scan_result(int slot)
         engine_line(t);
         text_centre(94, t, g_engines ? COL_MID : COL_DIM, 1);
         if (g_engineInfo[0]) text_centre(106, g_engineInfo, COL_DIM, 1);
-        text_centre(124, "PRESS A BUTTON", COL_WAIT, 1);
+        if (eng_scan_note(t)) text_centre(115, t, COL_FAIL, 1);     // why that engine found nothing
+        text_centre(126, "PRESS A BUTTON", COL_WAIT, 1);
     } else {
         int a = put_dec(t, 0, g_songCount, 1);
         if (g_scan.engine != ENG_ID_MP2K) { a = put_str(t, a, " "); a = put_str(t, a, eng_by_id(g_scan.engine)->name); }
@@ -968,6 +969,7 @@ void ui_scan_result(int slot)
         }
         t[a] = 0;
         text_centre(118, t, COL_MID, 1);
+        if (eng_scan_note(t)) text_centre(127, t, COL_DIM, 1);     // a named engine that found nothing
         if (slot >= 0 && slot < GBA_PATCH_SLOTS) {
             a = put_str(t, 0, "FROM SAVED SLOT ");
             put_dec(t, a, (uint32_t)slot + 1, 1);

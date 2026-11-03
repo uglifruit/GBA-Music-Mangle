@@ -50,8 +50,8 @@ an assistant.
   - The engine sources are LISTED in `payload/build.sh` and `tools/pcplay/build.sh` (engines/ also
     holds host mains and trial mains that must not be linked).
   - Check MP2K is untouched with byte-identical pcplay WAVs before and after an engine change, and
-    run `modtest test.gba msdemo.gba eng/gax.gba eng/krawall.gba eng/mixed.gba` (make_demo.py's
-    and mkengines.py's carts) for the other engines' checks.
+    run `modtest test.gba msdemo.gba eng/gax.gba eng/krawall.gba eng/mixed.gba eng/krawall2.gba`
+    (make_demo.py's and mkengines.py's carts) for the other engines' checks.
   - Each non-MP2K engine is an `EngCore` (eng_core.h) on the shared transport in engine.c; its glue
     is `payload/eng_<name>.c` (built by the payload/*.c glob), its core is in engines/ (listed).
   - Engine glue must not touch `g_patch` (pcplay links no mod.c): Krawall's bank choice is
@@ -148,6 +148,65 @@ an assistant.
   (`hold_result()` in main.c).
 - Go Go Beckham, Premier Manager and Hoyle's all reported no MP2K on the first hardware session.
   Re-scan them with this build to name their engines.
+
+## Real carts (dumps, 2026-11-03)
+
+- **Andy supplied dumps** of BattleBots (MusyX), Denki Blocks (MusyX), Lemony Snicket (Krawall) and
+  Tang Tang (GAX 2.01a) in `Downloads/GBA ROM DUMPS` (his own carts). Never commit them or anything
+  derived from them. pcplay cannot open a path with an apostrophe: copy to short names.
+- **MusyX "notes but silence" was the starting program.** A song group opens with 16 bytes, each MIDI
+  channel's starting program; tracks started on program 0, and these songs send no program changes,
+  so every part played sound-list entry 0 (on Denki a PSG macro). Fixed in `ms_start`: Denki now
+  plays. Still open on MusyX:
+  - **PSG parts** (VOICE_ON 32 / SETNOISE 33 / HARDENVELOPE 36) are silent: the CAL row says `PSG`.
+    A macro header's first byte looks like the voice (0xFF any PCM voice, 0..3 a PSG channel?);
+    some 0xFF macros also VOICE_ON. Worth doing against these dumps, not from the GB manual
+    (whose opcode numbers differ).
+  - **Keymaps** (header byte 2 = 1; BattleBots' drums): entries are {sample u16, key x256, pan?, ?,
+    flag, ?}, but notes run past their length (keymap 131: 32 entries, notes 32..44), so they do not
+    start at note 0. The base is unknown; those notes are rejected (`R8`). Don't guess it.
+  - `C30` (8 bytes, e.g. `00000000ff4400`) appears in layer-like macros that start nothing else.
+  - Keymap evidence (10 games, 2026-11-03): an entry is {sample u16, TRANSPOSE s16 in 1/256
+    semitone, 4 bytes}; the "key" column is a transpose, constant across a zone (Rayman HR km 66:
+    +16/+6/-4 over three samples), falling by one per entry in drum kits so every drum lands on one
+    pitch. Index = note - start. Start 36 fits every keymap's notes in Rayman HR, Star Wars NDA, The
+    Incredibles, Ready 2 Rumble 2, Ace Lightning, Beckham; 24 in BattleBots and Spider-Man (their
+    lowest notes are exactly 24); Lady Sia fits neither. Estimating start = sample root - transpose -
+    index gives ~36 / ~22 per game, but not for kits whose transposes are all 0 (Beckham, Lady Sia),
+    and whether transpose 0 means "the sample's own pitch" is unsettled. Not implemented yet.
+  - **The sample root key is a byte at +10** (fixed 2026-11-03): +11 is something else (1 on Harry
+    Potter CoS's 16/32-byte waveform samples and on two of Lady Sia's). The u16 read hid Harry Potter
+    entirely and rejected those two Lady Sia samples, so Lady Sia was missing notes on hardware
+    (`R4` on five songs, one song silent); they play now.
+- **More dumps (same folder):** Lady Sia (MusyX, 12 songs; sample starts identical before and after
+  the starting-program fix, so that fix leaves it unchanged), Go! Go! Beckham (MusyX, 29), Finding
+  Nemo (GAX 3, 14 songs; CAL `OLD02`: the old validator kept exactly the two the trial found),
+  Narnia (Krawall `version.h 2005-04-21`, 39 modules, every one valid in BOTH formats: the
+  "valid both ways = modern" rule is what keeps it from listing each song twice), Speedball 2 (MP2K, every song on players 1+: probably the game whose songs
+  were all called SFX; by content now 5 MUSIC, 28 JINGLE, 12 SFX). Then (MusyX) Ace Lightning 22,
+  The Incredibles 116, Rayman: Hoodlums' Revenge 9, Ready 2 Rumble 2 6, Spider-Man 10, Star Wars:
+  The New Droid Army 17, Harry Potter CoS 81 (almost all PSG, so silent); and GAX 2: Bruce Lee 2.35,
+  Spider-Man: Mysterio's Menace 2.01b, Tony Hawk 3 2.11 (all named, none playable). Scans take
+  about 0.1 s each on the PC.
+- **Lemony Snicket's Krawall has no "Krawall" text**, only `$Id: player.c,v 1.4 2003/03/19 23:12:15
+  seb Exp`. The sniff now takes `$Id: player.c,v ` when " seb " follows (`Sniff.needs`). Its 20
+  modules are all 2003-format, sample-based (226-sample bank, unsigned, centred on 128).
+- **Krawall discovery follows UnkrawerterGBA** (MIT, has met real carts): a bank is a run of pointers
+  judged on its first four entries, which must ascend 16+ bytes apart. Instruments: envelope "max"
+  255 is legal (krawerter writes num-1 for no points), a junk high byte in the sample map passes (and
+  plays its low byte, krawall.c); sample pan/volume are not judged. A module valid in both formats
+  is the modern one (listing both doubled every song). The restart order is no longer a gate.
+- **Krawall sub-songs:** 254 markers split a module's order list into songs (Krawall's songIndex /
+  KRAP_MODE_SONG). `kr_module_songs()`; a song number is module x 64 + song; `KrSong.start_order`
+  and `song_mode` (loop or stop at the next marker). A module's only song keeps the old behaviour.
+- **Scan speed:** each engine pass is an IWRAM word loop (`gx_words`, `kr_words`, `mx_words`)
+  that calls the full validator only where two or three aligned words allow a structure there
+  (0.3 % of words or fewer on real code). The MP2K heuristic and MusyX passes are skipped when
+  the cart names GAX or Krawall (FULL runs them). Not timed on hardware yet.
+- **Result screen:** a named engine with no table says why on a red line (`eng_scan_note()`):
+  "GAX 2.X: NOT SUPPORTED YET", "KRAWALL: NO SAMPLE BANK M.. S.I. L...".
+- modtest takes a sixth cart, `eng/krawall2.gba` (mkengines.py): sub-songs, the 255 envelope, the
+  junk byte, a wide pan. 189 checks.
 
 ## Booting from a saved slot (patch v4, 2026-10-27)
 
@@ -313,7 +372,7 @@ an assistant.
 
 ## Payload facts
 
-- 114 KB with all four engines, about 17.3 s to upload (65.9 KB / 10 s with MP2K alone). IWRAM holds about 11 KB: the DMA handlers, the dispatcher,
+- 117.5 KB with all four engines, about 17.9 s to upload (65.9 KB / 10 s with MP2K alone). IWRAM holds about 11 KB: the DMA handlers, the dispatcher,
   `mixer_render`, the scan loop, the drawing primitives, `mod_update`, `clock_service`,
   `player_update`, the rings, the echo line and the accumulators.
 - **Drawing speed (2026-10-27, FM's `SPEEDUPSCREEN.md`):** `rect`/`line`/`glyph`/`text` are FM's

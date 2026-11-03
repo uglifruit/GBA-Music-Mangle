@@ -5,6 +5,26 @@ and GAX are not yet. This document says what the engines share, what has to happ
 turns out to use one of them, and how the card stays one instrument with one UI whichever engine
 is playing. "As built" below records where the build differs from the design.
 
+## Real carts (2026-11-03)
+
+Dumps of four of Andy's carts settled what the hardware reports could not:
+
+- **MusyX (BattleBots, Denki Blocks): notes but no sound.** Each song group starts with 16 bytes, the
+  starting program of each MIDI channel; tracks started on program 0, and these songs send no program
+  changes, so every part played the first sound (on Denki, a PSG macro). Fixed in `ms_start`. Still
+  silent: the parts written for the Game Boy channels (VOICE_ON / SETNOISE / HARDENVELOPE; the CAL
+  row shows `PSG`), and BattleBots' drum keymaps, whose first key is not yet known.
+- **Krawall (Lemony Snicket): not found.** The cart has no "Krawall" text, only the player's CVS line
+  `$Id: player.c,v 1.4 2003/03/19 ... seb Exp`, now a signature when "seb" (the author) follows. Its
+  20 modules then play. Discovery was also brought in line with UnkrawerterGBA (banks judged on
+  their first four pointers; envelope counts of 255, junk sample-map bytes and wide pans accepted),
+  a module is read in one format only, and the songs inside a module (split by 254) are listed.
+- **GAX (Tang Tang): GAX Sound Engine v2.01a**, which this player cannot read; the result screen now
+  says so.
+- **The scan:** each pass checks a word with two or three aligned loads in IWRAM and runs its full
+  validator only where they allow a structure; carts naming GAX or Krawall skip the MP2K heuristic
+  and MusyX passes.
+
 ## As built (2026-11-01): all four engines
 
 - **GAX and Krawall are in** (`payload/eng_gax.c`, `eng_krawall.c`), MusyX moved to `eng_musyx.c`, and

@@ -3,6 +3,10 @@
 
   gax.gba      a GAX 3 song (the GAX player's own test fixture) and the engine's credit text
   krawall.gba  a Krawall module with a four-entry sample bank and a "$Id: Krawall" line
+  krawall2.gba an instrument-based Krawall module holding two songs (order list 0, +++, 1) whose
+               restart lies past its order list, with what real carts have and the first discovery
+               refused: an instrument with no envelope points (count stored as 255), a sample-map
+               entry with a junk high byte, a sample panned past +-64
   mixed.gba    the MP2K test cart (mktestrom.py's) with the GAX song and text added: a cart that
                uses two engines, for the scan's multi-engine tables
 
@@ -47,20 +51,60 @@ def gax_block(rom, o):
     rom[o + 0x6001:o + 0x6001 + len(text)] = text      # deliberately unaligned
 
 
-def krawall_block(rom, o):
-    """Krawall: module at o+0x1000, pattern at o+0x2000, a sample, a 4-entry bank at o+0x800."""
-    for k in range(4):
-        put32(rom, o + 0x800 + 4 * k, BASE + o + 0x3000)
-    put32(rom, o + 0x3000, 256); put32(rom, o + 0x3004, BASE + o + 0x3012 + 256); put32(rom, o + 0x3008, 8363)
-    rom[o + 0x300E] = 64; rom[o + 0x3010] = 1
+def kr_sample(rom, a, pan=0):
+    """A 256-byte looping Krawall sample at a (a saw), as krawerter's Sample.cpp lays one out."""
+    put32(rom, a, 256); put32(rom, a + 4, BASE + a + 0x12 + 256); put32(rom, a + 8, 8363)
+    rom[a + 0xE] = 64; rom[a + 0xF] = pan & 255; rom[a + 0x10] = 1
     for i in range(257):
-        rom[o + 0x3012 + i] = ((i % 32) * 7 + 16) & 255
+        rom[a + 0x12 + i] = ((i % 32) * 7 + 16) & 255
+
+
+def kr_bank(rom, o, n, first, stride):
+    """A bank: n pointers at o to entries first, first + stride, ... (ascending, as krawerter writes)."""
+    for k in range(n):
+        put32(rom, o + 4 * k, BASE + first + k * stride)
+
+
+def krawall_block(rom, o):
+    """Krawall: module at o+0x1000, pattern at o+0x2000, a 4-entry bank of samples at o+0x800."""
+    kr_bank(rom, o + 0x800, 4, o + 0x3000, 0x200)
+    for k in range(4):
+        kr_sample(rom, o + 0x3000 + k * 0x200)
     m = o + 0x1000
     rom[m] = 1; rom[m + 1] = 1; rom[m + 355] = 128; rom[m + 356] = 6; rom[m + 357] = 125
     put32(rom, m + 364, BASE + o + 0x2000)
     put16(rom, o + 0x2020, 8)
     d = o + 0x2022
     rom[d:d + 4] = bytes([0x60, 49, 1, 0x50])
+    text = b'$Id: Krawall synthetic test $\0'
+    rom[o + 0x6002:o + 0x6002 + len(text)] = text
+
+
+def krawall2_block(rom, o):
+    """Krawall, instrument-based: module at o+0x1000 (orders 0, 254, 1; restart 5), patterns at
+    o+0x2000 (8 rows, instrument 1) and o+0x2100 (64 rows, instrument 3), samples at o+0x3000,
+    instruments at o+0x4000, their banks at o+0x800 and o+0x900."""
+    kr_bank(rom, o + 0x800, 4, o + 0x3000, 0x200)
+    for k in range(4):
+        kr_sample(rom, o + 0x3000 + k * 0x200, pan=-100 if k == 2 else 0)
+    kr_bank(rom, o + 0x900, 4, o + 0x4000, 0x140)
+    for k in range(4):
+        a = o + 0x4000 + k * 0x140
+        for i in range(96):
+            put16(rom, a + 2 * i, k)                  # every key plays sample k
+        if k == 0:
+            put16(rom, a + 2 * 48, 0x9800)            # note 49's entry: a junk high byte over 0
+        if k == 2:
+            rom[a + 192 + 48] = rom[a + 244 + 48] = 255   # no points: krawerter writes num-1 = 255
+    m = o + 0x1000
+    rom[m] = 1; rom[m + 1] = 3; rom[m + 2] = 5        # one channel, three orders, restart past them
+    rom[m + 3:m + 6] = bytes([0, 254, 1])
+    rom[m + 355] = 128; rom[m + 356] = 6; rom[m + 357] = 125; rom[m + 358] = 1
+    put32(rom, m + 364, BASE + o + 0x2000); put32(rom, m + 368, BASE + o + 0x2100)
+    put16(rom, o + 0x2020, 8)
+    rom[o + 0x2022:o + 0x2026] = bytes([0x20, 49, 1, 0])          # ch 0: note 49, instrument 1
+    put16(rom, o + 0x2120, 64)
+    rom[o + 0x2122:o + 0x2126] = bytes([0x20, 49, 3, 0])          # ch 0: note 49, instrument 3
     text = b'$Id: Krawall synthetic test $\0'
     rom[o + 0x6002:o + 0x6002 + len(text)] = text
 
@@ -76,6 +120,10 @@ def main():
     header(rom, b'KRAWALL TEST', b'KRWT')
     krawall_block(rom, 0x1000)
     (out / 'krawall.gba').write_bytes(rom)
+    rom = bytearray(0x10000)
+    header(rom, b'KRAWALL TWO', b'KRW2')
+    krawall2_block(rom, 0x1000)
+    (out / 'krawall2.gba').write_bytes(rom)
     if len(sys.argv) > 2:
         rom = bytearray(pathlib.Path(sys.argv[2]).read_bytes())
         o = 0xC0000

@@ -28,7 +28,7 @@ static void fixture(int old) {
     rom[data]=0x60;rom[data+1]=old?98:49;rom[data+2]=1;rom[data+3]=0x50;
     KrHooks h;kr_mixer_hooks(&h,&p);h.event=event;
     KrRom r={rom,BASE,SIZE};kr_init(&p,r,&h);
-    KrSong s={BASE+0x1000,BASE+0x800,BASE+0x804,1,1,(uint8_t)old};
+    KrSong s={BASE+0x1000,BASE+0x800,BASE+0x804,1,1,(uint8_t)old,0,0};
     assert(kr_start(&p,&s));
 }
 static void render(void){int8_t l[16],r[16];kr_pcm_render(l,r);}
@@ -98,13 +98,23 @@ static void unsigned_and_bridge(void) {
     kr_tick(&p);assert(p.tracks[0].instrument==257&&p.tracks[0].active);
     puts("PASS unsigned midpoint silence, bridge/followers/unsupported controls and extended instrument IDs");
 }
+// Banks laid out as krawerter writes them: entries ascending, each list after its own data. The
+// instruments include what real carts hold and per-entry tests once refused: no envelope points
+// (stored as 255) and a junk high byte in a sample map.
 static void discovery(void){
     fixture(0);
-    for(unsigned i=0;i<4;++i){w32(0x800+4*i,BASE+0x3000);w32(0x810+4*i,BASE+0x4000);}
+    for(unsigned i=0;i<4;++i){
+        unsigned s=0x5000+i*0x200;w32(0x800+4*i,BASE+s);
+        w32(s,256);w32(s+4,BASE+s+0x12+256);w32(s+8,8363);rom[s+0xE]=64;rom[s+0xF]=(uint8_t)(i==3?-100:0);
+        w32(0x900+4*i,BASE+0x4000+i*0x140);
+    }
+    rom[0x4000+192+48]=rom[0x4000+244+48]=255;w16(0x4140+2*20,0x9800);
     KrDiscovery d={0};for(unsigned i=0;i<SIZE;i+=0x4000)kr_discover_slice(&d,&p.rom,BASE+i,BASE+i+0x4000);
-    assert(d.module_count>=1&&d.sample_count>=1&&d.instrument_count>=1);
+    assert(d.module_count==1&&d.formats[0]==KR_MODERN&&d.sample_count>=1&&d.instrument_count>=1);
     assert(d.samples[0].address==BASE+0x800&&d.samples[0].count==4);
-    assert(d.instruments[0].address==BASE+0x810&&d.instruments[0].count==4);
+    assert(d.instruments[0].address==BASE+0x900&&d.instruments[0].count==4);
+    uint8_t starts[4];uint32_t ticks[4];
+    assert(kr_module_songs(&p.rom,BASE+0x1000,KR_MODERN,starts,ticks,4)==1&&starts[0]==0&&ticks[0]==48);
     puts("PASS incremental trial discovery of module/sample/instrument candidates");
 }
 static uint32_t seed=12345;

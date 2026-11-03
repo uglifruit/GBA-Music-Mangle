@@ -195,6 +195,8 @@ int main(int argc, char **argv)
                (g_engines & ENG_KRAWALL) ? "KRAWALL " : "");
         if (g_engines & ENG_XM) printf("XM x%u", g_xmCount);
         printf("\ninfo   %s\n", g_engineInfo);
+        char note[48];
+        if (eng_scan_note(note)) printf("note   %s\n", note);         // the result screen's red line
         return 1;
     }
 
@@ -266,5 +268,10 @@ int main(int argc, char **argv)
     fclose(w);
     printf("wrote %s: %.1f s, peak %u/128, ticks %u, beats %u, loops %u, bad reads %lu\n", out, secs,
            r.peak, g_plTicks, g_plBeats, g_plLoops, s_badReads);
+    if (g_eng->core) {                                   // the CAL page's engine row
+        char d[48];
+        eng_diag(d);
+        printf("engine     %s\n", d);
+    }
     return s_badReads ? 1 : 0;
 }

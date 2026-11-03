@@ -59,3 +59,4 @@ void krw_discover_reset(void);  void krw_discover(uint32_t b, uint32_t e);  void
 int  mx_table_songs(const ScanResult *t, uint16_t *ix, uint8_t *kind, int max);
 int  gx_table_songs(const ScanResult *t, uint16_t *ix, uint8_t *kind, int max);
 int  krw_table_songs(const ScanResult *t, uint16_t *ix, uint8_t *kind, int max);
+int  gx_scan_note(char *t);     int  krw_scan_note(char *t);   // see eng_scan_note()

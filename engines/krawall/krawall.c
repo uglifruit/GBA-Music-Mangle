@@ -49,7 +49,7 @@ static unsigned pattern_rows(const KrRom *r,uint32_t a,unsigned old) {
 int kr_module_valid(const KrRom *r,uint32_t m,uint8_t format) {
     if(!r->data||format>KR_2003||!range(r,m,368)) return 0;
     unsigned ch=u8(r,m),orders=u8(r,m+1);
-    if(!ch||ch>32||!orders||u8(r,m+2)>=orders||!u8(r,m+356)||
+    if(!ch||ch>32||!orders||!u8(r,m+356)||
        u8(r,m+356)>31||u8(r,m+357)<32||u8(r,m+355)>128||u8(r,m+363)) return 0;
     for(unsigned i=358;i<363;++i) if(u8(r,m+i)>1) return 0;
     unsigned real=0;
@@ -73,6 +73,24 @@ uint32_t kr_module_ticks(const KrRom *r,uint32_t m,uint8_t format) {
         rows+=pattern_rows(r,pattern_addr(r,m,i),format);
     }
     return rows*speed;
+}
+unsigned kr_module_songs(const KrRom *r,uint32_t m,uint8_t format,uint8_t *starts,uint32_t *ticks,unsigned cap) {
+    if(!cap||!kr_module_valid(r,m,format)) return 0;
+    unsigned orders=u8(r,m+1),speed=u8(r,m+356),n=0,i=0;
+    while(i<orders&&n<cap) {
+        while(i<orders&&u8(r,m+3+i)==254) ++i;
+        if(i>=orders||u8(r,m+3+i)==255) break;
+        uint32_t rows=0;starts[n]=(uint8_t)i;
+        for(;i<orders;++i) {
+            unsigned x=u8(r,m+3+i);
+            if(x>=254) break;
+            rows+=pattern_rows(r,pattern_addr(r,m,i),format);
+        }
+        if(ticks) ticks[n]=rows*speed;
+        ++n;
+        if(i<orders&&u8(r,m+3+i)==255) break;
+    }
+    return n;
 }
 unsigned kr_scan(const KrRom *r,uint32_t begin,uint32_t end,uint8_t f,uint32_t *out,unsigned cap) {
     unsigned n=0;
@@ -136,7 +154,11 @@ int kr_start(KrPlayer *p,const KrSong *s) {
     p->song.module=s->module;p->song.samples=s->samples;p->song.instruments=s->instruments;
     p->song.sample_count=s->sample_count;p->song.instrument_count=s->instrument_count;p->song.format=s->format;
     p->format=s->format;p->channels=u8(&p->rom,s->module);p->orders=u8(&p->rom,s->module+1);
-    p->restart=u8(&p->rom,s->module+2);p->speed=u8(&p->rom,s->module+356);
+    p->restart=u8(&p->rom,s->module+2);if(p->restart>=p->orders)p->restart=0;
+    p->song_mode=s->song_mode&&s->start_order<p->orders;
+    if(p->song_mode)p->restart=s->start_order;
+    p->song.start_order=p->song_mode?s->start_order:0;p->song.song_mode=p->song_mode;
+    p->speed=u8(&p->rom,s->module+356);
     p->bpm=u8(&p->rom,s->module+357);p->global_volume=u8(&p->rom,s->module+355);
     p->instrument_based=u8(&p->rom,s->module+358);p->error=0;p->ticks=0;
     p->pending_order=p->pending_row=UINT16_MAX;
@@ -144,12 +166,13 @@ int kr_start(KrPlayer *p,const KrSong *s) {
         p->tracks[c].pan=(int8_t)u8(&p->rom,s->module+259+c);p->tracks[c].channel_volume=64;
     }
     p->running=1;
-    if(!position(p,0,0)) return fail(p);
+    if(!position(p,p->song.start_order,0)) return fail(p);
     return 1;
 }
 int kr_restart(KrPlayer *p) { KrSong s; s.module=p->song.module;s.samples=p->song.samples;
     s.instruments=p->song.instruments;s.sample_count=p->song.sample_count;
-    s.instrument_count=p->song.instrument_count;s.format=p->song.format;return kr_start(p,&s); }
+    s.instrument_count=p->song.instrument_count;s.format=p->song.format;
+    s.start_order=p->song.start_order;s.song_mode=p->song.song_mode;return kr_start(p,&s); }
 uint32_t kr_tick_hz_q16(const KrPlayer *p) { return ((uint32_t)p->bpm*p->mods.tempo*512u)/5; }
 
 // Equal-tempered pitch, C-4 (MIDI 60) = 8363 Hz. Tables generated mathematically,
@@ -226,6 +249,7 @@ static int trigger(KrPlayer *p,unsigned n,unsigned note) {
         uint32_t a=u32(&p->rom,entry);
         if(note<1||note>96||!range(&p->rom,a,302)) return 0;
         sample=u16(&p->rom,a+2*(note-1));t->instrument_addr=a;
+        if(sample>=p->song.sample_count) sample&=255;   // a junk high byte (seen on real carts)
         if(sample>=p->song.sample_count) return 0;
         entry=p->song.samples+4*sample;
     }
@@ -376,8 +400,9 @@ void kr_tick(KrPlayer *p) {
         row=p->pending_row!=UINT16_MAX?p->pending_row:0;
     } else if(row>=p->rows){++order;row=0;}
     p->pending_order=p->pending_row=UINT16_MAX;
-    while(order<p->orders&&u8(&p->rom,p->song.module+3+order)==254)++order;
-    if(order>=p->orders||(order<p->orders&&u8(&p->rom,p->song.module+3+order)==255)) {
+    unsigned marker=0;
+    while(order<p->orders&&u8(&p->rom,p->song.module+3+order)==254){++order;marker=1;}
+    if(order>=p->orders||(order<p->orders&&u8(&p->rom,p->song.module+3+order)==255)||(marker&&p->song_mode)) {
         if(!p->repeat){kr_stop(p);return;}order=p->restart;row=0;
     }
     if(order<p->order||(order==p->order&&row<=p->row)) {++p->loops;event(p,KR_EVENT_LOOP,p->loops);}

@@ -5,6 +5,8 @@
 // count, the tempo and its dice. Voices keep ringing across a jump, as MP2K's do.
 
 #include "eng_core.h"
+#include "gba.h"
+#include "rom.h"
 #include "player.h"
 #include "scan.h"
 #include "mod.h"
@@ -137,11 +139,15 @@ static uint32_t tempo_i(void)
 
 static void diag(char *t, int a)
 {
-    // Unknown opcodes (two masks), warnings, and E1 once the decoder stopped on bad data.
+    // Unknown opcodes (two masks), warnings, why voices were turned away (MS_WHY_*), E1 once the
+    // decoder stopped on bad data, and PSG when a macro asked for a Game Boy channel (VOICE_ON,
+    // SETNOISE, HARDENVELOPE: notes that play silently here, since only PCM voices are rendered).
     t[a++] = ' '; t[a++] = 'U'; a = eng_put_hex(t, a, s_ms.unsupported[0], 8);
     t[a++] = ':'; a = eng_put_hex(t, a, s_ms.unsupported[1], 8);
     t[a++] = ' '; t[a++] = 'W'; a = eng_put_hex(t, a, s_ms.warnings, 2);
+    t[a++] = ' '; t[a++] = 'R'; a = eng_put_hex(t, a, s_ms.why, 1);
     t[a++] = ' '; t[a++] = 'E'; t[a++] = s_ms.error ? '1' : '0';
+    if (s_ms.unsupported[1] & 0x33u) { t[a++] = ' '; t[a++] = 'P'; t[a++] = 'S'; t[a++] = 'G'; }
     t[a] = 0;
 }
 
@@ -164,11 +170,37 @@ const Engine g_engMusyx = {
 
 void mx_discover_reset(void) {}
 
+// The pass's word loop, in IWRAM: it reads every word of the cart. ms_root_valid() runs only where a
+// root could start: its macro, song and sample table offsets (+0, +24, +28) all nonzero and inside
+// the cart. Up to cap roots, as ms_scan() finds them.
+IWRAM_CODE static unsigned mx_words(const EngRom *r, uint32_t begin, uint32_t end, uint32_t *roots, unsigned cap)
+{
+    uint32_t base = r->base, size = r->size;
+    if (size < 32) return 0;
+    uint32_t stop = base + size - 28;                   // a root needs 32 bytes from a
+    if (end > stop) end = stop;
+    if (end <= begin) return 0;
+    const volatile uint32_t *p = (const volatile uint32_t *)ROM_PTR(begin);
+    uint32_t n = (end - begin) >> 2;
+    unsigned found = 0;
+    for (uint32_t i = 0; i < n && found < cap; i++) {
+        uint32_t a = begin + (i << 2), room = base + size - a;
+        uint32_t o = p[i];
+        if (!o || o >= room) continue;
+        o = p[i + 6];
+        if (!o || o >= room) continue;
+        o = p[i + 7];
+        if (!o || o >= room) continue;
+        if (ms_root_valid(r, a)) roots[found++] = a;
+    }
+    return found;
+}
+
 void mx_discover(uint32_t begin, uint32_t end)
 {
     EngRom r = eng_cart_rom();
     uint32_t roots[8];
-    unsigned n = ms_scan(&r, begin, end, roots, 8);
+    unsigned n = mx_words(&r, begin, end, roots, 8);
     for (unsigned i = 0; i < n; i++) {
         MsCatalogue c;
         MsSong s;
