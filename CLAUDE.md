@@ -158,11 +158,25 @@ an assistant.
   channel's starting program; tracks started on program 0, and these songs send no program changes,
   so every part played sound-list entry 0 (on Denki a PSG macro). Fixed in `ms_start`: Denki now
   plays. Still open on MusyX:
-  - **PSG parts** (VOICE_ON 32 / SETNOISE 33 / HARDENVELOPE 36) are silent: the CAL row says `PSG`.
-    A macro header's first byte looks like the voice (0xFF any PCM voice, 0..3 a PSG channel?);
-    some 0xFF macros also VOICE_ON. Worth doing against these dumps, not from the GB manual
-    (whose opcode numbers differ).
+  - **PSG parts (implemented 2026-11-03, against the dumps; not heard on hardware yet).** The macro
+    header's first byte is the hardware voice: 0/1 squares (VOICE_ON + HARDENVELOPE only), 2 wave
+    (only STARTSAMPLE, of 16/32-byte waveforms flagged +11 = 1), 3 noise (SETNOISE), 4+ a PCM voice,
+    255 any. "Any" with a PSG command takes the TRACK's channel when the track is 0..3 (GB manual:
+    MIDI channels 1-4 map to voices 1-4; Harry Potter CoS's PSG parts sit exactly there), else noise
+    / a square by parity. musyx.c keeps `MsPsg psg[4]`; eng_musyx.c `psg_push()` writes registers after
+    every native tick; pcplay emulates them (tools/pcplay/psgemu.c, `--no-psg` to leave out).
+    Commands added with it, from the data: 2 SETVOLUME (Denki's echoes 127..70), 6 LOOP n times to a
+    s16 offset (Denki's arpeggios), 8 SETNOTE absolute key + detune (arpeggio steps 84 86 88 91; drum
+    macros pin a key), 13 GOTO may land in another macro (Harry Potter's shared tails: allowed within
+    the macro region, `macro_lo/hi`). GUESSES to check by ear: HARDENVELOPE's byte is step+direction
+    only (its volume nibble is always 0 in the data), volume from the note; the wave channel gets +12
+    (it sounds an octave below the squares for one register value); WAITs stay on the 96-PPQN tick
+    (arpeggios may run fast if MusyX times them per frame); only a waveform's first 16 bytes are used.
   - `C30` (8 bytes, e.g. `00000000ff4400`) appears in layer-like macros that start nothing else.
+- **HARDWARE CHECKS ANDY HAS BEEN ASKED FOR (2026-11-03):** Go! Go! Beckham's and Lady Sia's drum kits
+  (transpose 0, so they play about two octaves under their samples' own pitch: right or too deep?);
+  the MusyX PSG parts (Denki Blocks, Harry Potter CoS, Lady Sia, Ready 2 Rumble): arpeggio speed,
+  envelopes, the wave channel's octave.
 - **Keymaps (implemented 2026-11-03; drum kits and multisampled instruments):** header byte 2 = 1,
   a u16 count, entries {sample u16, TRANSPOSE s16 in 1/256 semitone, 4 bytes (pan? flags?)}. The
   transpose is constant across a zone (Rayman HR km 66: +16/+6/-4 over three samples) and falls by

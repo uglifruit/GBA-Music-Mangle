@@ -3,6 +3,12 @@
 // 96 PPQN native, so one tick is four of its. It reads the mods live (pitch and volume are
 // recomputed on every update), so a bar snapshot only holds the sequence: the tracks, the tick
 // count, the tempo and its dice. Voices keep ringing across a jump, as MP2K's do.
+//
+// The Game Boy channels: musyx.c keeps their state (MsPsg); psg_push() writes it to the sound
+// registers after every native tick and update, touching a channel only when something changed.
+// The hardware takes a new volume or envelope only when a channel is restarted, so a change of either
+// restarts it (as cgb.c does for MP2K); a pitch change alone does not. MP2K and MusyX never play at
+// once, so the channels are free while this engine runs.
 
 #include "eng_core.h"
 #include "gba.h"
@@ -10,6 +16,8 @@
 #include "player.h"
 #include "scan.h"
 #include "mod.h"
+#include "m4a.h"
+#include "cgb.h"
 #include "../engines/musyx/musyx.h"
 
 static MsPlayer  s_ms;
@@ -19,6 +27,78 @@ static uint8_t   s_ready;
 static MsTrack   s_snap[MS_TRACKS];
 static uint32_t  s_snapTicks, s_snapRng;
 static uint16_t  s_snapBpm;
+
+// ---- the Game Boy channels -----------------------------------------------------------------------
+
+typedef struct { uint16_t freq; uint8_t on, nrx2, duty, noise; uint32_t wave; } PsgOut;
+static PsgOut s_out[MS_PSG];
+static const uint8_t kNrx1[MS_PSG] = { 0x62, 0x68, 0x72, 0x78 };
+static const uint8_t kNrx2[MS_PSG] = { 0x63, 0x69, 0x73, 0x79 };
+static const uint8_t kNrx3[MS_PSG] = { 0x64, 0x6C, 0x74, 0x7C };
+static const uint8_t kNrx4[MS_PSG] = { 0x65, 0x6D, 0x75, 0x7D };
+
+static void psg_silence(unsigned ch)
+{
+    switch (ch) {                                    // as cgb_off(): DAC on, volume 0, restarted
+    case 0: R8(0x63) = 8; R8(0x65) = 0x80; break;
+    case 1: R8(0x69) = 8; R8(0x6D) = 0x80; break;
+    case 2: R8(0x70) = 0; break;
+    default: R8(0x79) = 8; R8(0x7D) = 0x80; break;
+    }
+    R8(0x81) &= (uint8_t)~(0x11u << ch);
+    s_out[ch].on = 0;
+}
+
+static void psg_reset(void)
+{
+    R8(0x60) = 8; R8(0x80) = 0x77;
+    for (unsigned ch = 0; ch < MS_PSG; ch++) { psg_silence(ch); s_out[ch].wave = 0; }
+}
+
+// The 16 bytes of a waveform into wave RAM: play bank 1 while the CPU writes bank 0, as m4a does.
+static void psg_wave(uint32_t a)
+{
+    R8(0x70) = 0x40;
+    for (unsigned k = 0; k < 16; k += 4) R32(0x90 + k) = rom_u32(a + k);
+    R8(0x70) = 0x80;
+}
+
+static void psg_push(void)
+{
+    for (unsigned ch = 0; ch < MS_PSG; ch++) {
+        MsPsg *s = &s_ms.psg[ch];
+        PsgOut *o = &s_out[ch];
+        if (!s->on) { if (o->on) psg_silence(ch); s->trigger = 0; continue; }
+        int pitch = s->pitch + (ch == 2 ? 12 * 256 : 0);    // the wave channel sounds an octave lower
+        if (pitch < 0) pitch = 0;
+        if (pitch > 127 * 256) pitch = 127 * 256;
+        unsigned vol = s->volume >> 3, nrx2, freq;
+        if (ch == 2) nrx2 = gCgb3Vol[vol & 15];
+        else nrx2 = (vol << 4) | (s->env & 15u);
+        if (ch == 3) freq = s->noise != 255 ? s->noise : cgb_key_to_freq(4, pitch >> 8, 0);
+        else freq = cgb_key_to_freq(ch + 1, pitch >> 8, pitch & 255) & 0x7FFu;
+        int restart = s->trigger || !o->on || nrx2 != o->nrx2 || s->duty != o->duty ||
+                      (ch == 3 && freq != o->freq) || (ch == 2 && s->wave != o->wave);
+        if (restart) {
+            if (ch == 2) {
+                if (s->wave != o->wave) psg_wave(s->wave);
+                R8(0x70) = 0x80;
+                R8(kNrx1[ch]) = 0;
+            } else {
+                R8(kNrx1[ch]) = (uint8_t)(ch < 2 ? (s->duty & 3u) << 6 : 0);
+            }
+            R8(kNrx2[ch]) = (uint8_t)nrx2;
+            if (ch == 3) { R8(kNrx3[ch]) = (uint8_t)freq; R8(kNrx4[ch]) = 0x80; }
+            else { R8(kNrx3[ch]) = (uint8_t)freq; R8(kNrx4[ch]) = (uint8_t)(0x80 | (freq >> 8)); }
+        } else if (freq != o->freq) {
+            R8(kNrx3[ch]) = (uint8_t)freq;
+            R8(kNrx4[ch]) = (uint8_t)(freq >> 8);
+        }
+        R8(0x81) |= (uint8_t)(0x11u << ch);
+        o->on = 1; o->nrx2 = (uint8_t)nrx2; o->duty = s->duty; o->freq = (uint16_t)freq; o->wave = s->wave;
+        s->trigger = 0;
+    }
+}
 
 static void copy_bytes(void *dst, const void *src, unsigned size)
 {
@@ -62,7 +142,7 @@ static void sync(void)
     m->drop_chance    = g_mods.dropChance;
     if (!same_bytes(&s_last, m, sizeof(MsMods))) {
         copy_bytes(&s_last, m, sizeof(MsMods));
-        if (s_ms.running) ms_update(&s_ms);
+        if (s_ms.running) { ms_update(&s_ms); psg_push(); }
     }
 }
 
@@ -91,12 +171,13 @@ static int start(int n)
     if (!ms_song_info(&s_ms.rom, g_scan.songTable, g_songIx[n], &song)) return 0;
     sync();
     s_ms.repeat = (uint8_t)(g_plRepeat && !g_plOnce);
+    psg_reset();
     if (!ms_start(&s_ms, &song)) return 0;
     copy_bytes(&s_last, &s_ms.mods, sizeof(MsMods));
     return 1;
 }
 
-static void stop(void) { if (s_ready) ms_stop(&s_ms); }
+static void stop(void) { if (s_ready) { ms_stop(&s_ms); psg_reset(); } }
 static int  running(void) { return s_ready && s_ms.running; }
 static uint32_t loops(void) { return s_ms.loops; }
 
@@ -104,6 +185,7 @@ static int tick(void)
 {
     for (int k = 0; k < 4; ++k) {
         ms_tick(&s_ms);
+        psg_push();
         if (!s_ms.running) return 0;
         if (s_ms.ticks == 0) return 1;       // ended and repeated: ms_tick restarted it at tick 0
     }

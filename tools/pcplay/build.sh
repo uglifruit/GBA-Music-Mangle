@@ -13,7 +13,7 @@ ENG="../../engines/musyx/musyx.c ../../engines/gax/gax.c ../../engines/krawall/k
 EXE=build/pcplay
 [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]] && EXE=build/pcplay.exe
 "${CC_CMD[@]}" -std=gnu11 -DHOST -O2 -g -Wall -Wextra -I"$P" -I../.. \
-    pcplay.c "$P/rom.c" "$P/scan.c" "$P/player.c" "$P/cgb.c" "$P/mixer.c" "$P/m4a_tables.c" "$P/engine.c" "$P/eng_musyx.c" "$P/eng_gax.c" "$P/eng_krawall.c" $ENG \
+    pcplay.c psgemu.c "$P/rom.c" "$P/scan.c" "$P/player.c" "$P/cgb.c" "$P/mixer.c" "$P/m4a_tables.c" "$P/engine.c" "$P/eng_musyx.c" "$P/eng_gax.c" "$P/eng_krawall.c" $ENG \
     -o "$EXE"
 echo "built $EXE"
 

@@ -28,6 +28,18 @@ extern "C" {
 #define MS_WHY_SAMPLE 4u
 #define MS_WHY_MACRO 8u
 
+// The Game Boy channels (PSG): 0, 1 squares, 2 wave, 3 noise. MusyX on the GBA drives them from
+// macros (VOICE_ON / SETNOISE / HARDENVELOPE, a wave sample started on voice 2). The player keeps their
+// state here; the caller writes the registers (payload/eng_musyx.c) or emulates them (pcplay).
+#define MS_PSG 4
+typedef struct {
+    int32_t pitch;        // Q8 semitones (MIDI key x 256), mods included
+    uint32_t wave;        // wave channel: the 16 bytes (32 4-bit steps) to load, a bus address
+    uint8_t on,trigger;   // trigger: restart the channel (a new note, or a volume / envelope change)
+    uint8_t duty,env,noise,volume; // duty 0..3; env NRx2 low nibble (0 = none); noise NR43 or 255 (by pitch); volume 0..127
+    uint8_t track;
+} MsPsg;
+
 typedef EngRom MsRom;
 typedef struct {uint32_t root,song,group;uint16_t index;} MsSong;
 typedef struct {uint16_t songs,samples,macros;} MsCatalogue;
@@ -48,6 +60,8 @@ typedef struct {
     uint32_t macro_begin,macro_end,ip,keyoff,wait,gate_left,age,sample_rate;
     int32_t pitch;uint16_t macro_id,root_note;
     int16_t key_add;   // PLAYMACRO key offsets so far: a keymap reached through them is indexed by note + key_add
+    uint32_t loop_at,wave; // the counted loop (op 6) in progress; a wave sample's data
+    uint8_t hw,psg,duty,env,noise,loop_left; // header voice (255 any); PSG channel + 1 held; its settings
     uint8_t owner,note,velocity,volume,active,released,has_sample,tail,chains;
 } MsVoice;
 typedef struct {
@@ -55,6 +69,8 @@ typedef struct {
     uint32_t macros,samples,song_table,patterns,ticks,loops,rng,age;
     uint32_t unsupported[2],warnings,rejected,last_opcode;
     uint16_t macro_count,sample_count,song_count,bpm;
+    MsPsg psg[MS_PSG];uint8_t psg_owner[MS_PSG];   // owner: voice + 1, 0 none
+    uint32_t macro_lo,macro_hi;                    // the region all macros' code lies in (GOTO may cross)
     uint8_t running,error,repeat,preview,why;
 } MsPlayer;
 void ms_init(MsPlayer *,MsRom,const MsHooks *);

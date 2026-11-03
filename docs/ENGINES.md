@@ -12,8 +12,9 @@ Dumps of four of Andy's carts settled what the hardware reports could not:
 - **MusyX (BattleBots, Denki Blocks): notes but no sound.** Each song group starts with 16 bytes, the
   starting program of each MIDI channel; tracks started on program 0, and these songs send no program
   changes, so every part played the first sound (on Denki, a PSG macro). Fixed in `ms_start`. Still
-  silent: the parts written for the Game Boy channels (VOICE_ON / SETNOISE / HARDENVELOPE; the CAL
-  row shows `PSG`). Keymaps (drum kits, multisampled instruments) now play: every one is reached
+  silent then: the parts written for the Game Boy channels (VOICE_ON / SETNOISE / HARDENVELOPE; the
+  CAL row shows `PSG`), which now play too (musyx.c keeps the four channels' state, eng_musyx.c writes
+  the registers, pcplay emulates them). Keymaps (drum kits, multisampled instruments) now play: every one is reached
   through PLAYMACRO, whose key offset says where the map starts, and its entries transpose each note
   (see musyx.c, KEYMAPS). Harry Potter: Chamber of Secrets was hidden by reading the sample root key
   as two bytes; it is one.

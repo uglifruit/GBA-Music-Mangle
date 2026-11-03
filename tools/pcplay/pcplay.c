@@ -30,6 +30,7 @@
 #include "player.h"
 #include "mixer.h"
 #include "engine.h"
+#include "psgemu.h"
 
 uint8_t g_hostIo[0x400];
 static uint8_t *s_rom;
@@ -86,6 +87,7 @@ static void check_mixer(void)
 }
 
 typedef struct { int16_t *buf; uint32_t frames, cap; double sumSq; uint32_t peak; } Render;
+static int s_psg = 1;                // the Game Boy channels (psgemu.c); --no-psg leaves them out
 
 static void render(Render *r, uint32_t blocks, int fuzz)
 {
@@ -128,15 +130,18 @@ static void render(Render *r, uint32_t blocks, int fuzz)
         g_eng->update();
         mixer_render(L, R);
         check_mixer();
+        int16_t lr[AUDIO_BLOCK * 2];
+        for (int i = 0; i < AUDIO_BLOCK; i++) { lr[i * 2] = (int16_t)(L[i] * 256); lr[i * 2 + 1] = (int16_t)(R[i] * 256); }
+        if (s_psg) psg_emu_render(lr, AUDIO_BLOCK);
         for (int i = 0; i < AUDIO_BLOCK; i++) {
             if (r->buf && r->frames < r->cap) {
-                r->buf[r->frames * 2]     = (int16_t)(L[i] * 256);
-                r->buf[r->frames * 2 + 1] = (int16_t)(R[i] * 256);
+                r->buf[r->frames * 2]     = lr[i * 2];
+                r->buf[r->frames * 2 + 1] = lr[i * 2 + 1];
             }
             r->frames++;
-            int32_t a = L[i] < 0 ? -L[i] : L[i];
-            if ((uint32_t)a > r->peak) r->peak = (uint32_t)a;
-            r->sumSq += (double)L[i] * L[i] + (double)R[i] * R[i];
+            int32_t a = lr[i * 2] < 0 ? -lr[i * 2] : lr[i * 2];
+            if ((uint32_t)(a >> 8) > r->peak) r->peak = (uint32_t)(a >> 8);
+            r->sumSq += ((double)lr[i * 2] * lr[i * 2] + (double)lr[i * 2 + 1] * lr[i * 2 + 1]) / 65536.0;
         }
     }
 }
@@ -180,6 +185,7 @@ int main(int argc, char **argv)
 
     if (!rom_init()) { fprintf(stderr, "no cartridge header (0x96 at 0xB2)\n"); return 1; }
     s_strict = 1;
+    s_psg = !flag(argc, argv, "--no-psg");
     scan_run(NULL, flag(argc, argv, "--full"));
     // The scan starts on the MUSIC list when there is one (as the GBA does); --list overrides it.
     if (flag(argc, argv, "--songtable") || flag(argc, argv, "--list")) {

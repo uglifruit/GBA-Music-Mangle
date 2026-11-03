@@ -92,8 +92,37 @@ int ms_song_shape(const MsRom *r,uint32_t root,unsigned index,uint32_t *ticks,in
 }
 static void event(MsPlayer *p,unsigned kind,uint32_t value){if(p->hooks.event)p->hooks.event(p->hooks.user,kind,value);}
 static unsigned random8(MsPlayer *p){p->rng^=p->rng<<13;p->rng^=p->rng>>17;p->rng^=p->rng<<5;return p->rng&255;}
-static void off(MsPlayer *p,unsigned i){p->voices[i].active=p->voices[i].has_sample=0;if(p->hooks.stop)p->hooks.stop(p->hooks.user,i);}
-void ms_stop(MsPlayer *p){for(unsigned i=0;i<MS_VOICES;++i)off(p,i);for(unsigned i=0;i<16;++i)p->tracks[i].gate=0;p->running=0;event(p,MS_EVENT_STOP,0);}
+static void psg_drop(MsPlayer *p,unsigned i){
+    MsVoice *v=&p->voices[i];if(!v->psg)return;
+    unsigned ch=v->psg-1u;if(p->psg_owner[ch]==i+1u)p->psg_owner[ch]=0;v->psg=0;
+}
+static void off(MsPlayer *p,unsigned i){psg_drop(p,i);p->voices[i].active=p->voices[i].has_sample=0;if(p->hooks.stop)p->hooks.stop(p->hooks.user,i);}
+// PSG (see musyx.h). Which channel a macro's PSG command means: its header voice when that is 0..3;
+// for "any" (255) the track's when the track is 0..3 (the Game Boy MusyX manual: "MIDI channels 1-4
+// map to voices 1-4"; Harry Potter CoS's PSG parts sit exactly there); otherwise noise for SETNOISE
+// and a square by the track's parity (Lady Sia has a few such on tracks 4 and 5).
+static unsigned psg_channel(const MsVoice *v,unsigned noise){
+    if(v->hw<4)return v->hw;
+    if(v->owner<4)return v->owner;
+    return noise?3u:(v->owner&1u);
+}
+static void psg_claim(MsPlayer *p,unsigned i,unsigned ch){
+    unsigned o=p->psg_owner[ch];
+    if(o&&o!=i+1u&&p->voices[o-1].psg==ch+1u)p->voices[o-1].psg=0;
+    p->psg_owner[ch]=(uint8_t)(i+1u);p->voices[i].psg=(uint8_t)(ch+1u);p->psg[ch].trigger=1;
+}
+// The channels from the voices that hold them; called with every update.
+static void psg_sync(MsPlayer *p){
+    for(unsigned ch=0;ch<MS_PSG;++ch){
+        MsPsg *s=&p->psg[ch];unsigned o=p->psg_owner[ch];
+        const MsVoice *v=o?&p->voices[o-1]:0;
+        if(!v||!v->active||v->psg!=ch+1u){s->on=0;continue;}
+        s->on=1;s->track=v->owner;s->pitch=v->pitch+p->mods.pitch;
+        s->volume=(v->owner<16&&(p->mods.mute&(1u<<v->owner)))?0:v->volume;
+        s->duty=v->duty;s->env=v->env;s->noise=v->noise;s->wave=v->wave;
+    }
+}
+void ms_stop(MsPlayer *p){for(unsigned i=0;i<MS_VOICES;++i)off(p,i);for(unsigned ch=0;ch<MS_PSG;++ch){p->psg[ch].on=0;p->psg_owner[ch]=0;}for(unsigned i=0;i<16;++i)p->tracks[i].gate=0;p->running=0;event(p,MS_EVENT_STOP,0);}
 static int fail(MsPlayer *p,uint32_t address){p->error=1;ms_stop(p);event(p,MS_EVENT_BAD_DATA,address);return 0;}
 static void reject(MsPlayer *p,unsigned i,unsigned why,uint32_t address){++p->rejected;p->why|=(uint8_t)why;p->warnings|=MS_WARN_REJECTED_VOICE;off(p,i);event(p,MS_EVENT_BAD_DATA,address);}
 static int unsupported(MsPlayer *p,unsigned i,unsigned op){p->last_opcode=op;if(op<64)p->unsupported[op>>5]|=1u<<(op&31);else p->unsupported[1]|=1u<<30;event(p,MS_EVENT_UNSUPPORTED,op);if(!p->preview){off(p,i);return 0;}return 1;}
@@ -114,7 +143,13 @@ static int bind(MsPlayer *p,uint32_t root){
     if(!ms_root_valid(&p->rom,root))return 0;
     p->song.root=root;p->macros=relative(&p->rom,root,root,4);p->samples=relative(&p->rom,root,root+28,4);
     p->song_table=relative(&p->rom,root,root+24,4);p->song_count=(uint16_t)w(&p->rom,p->song_table);
-    p->macro_count=(uint16_t)table_count(&p->rom,root,p->macros);p->sample_count=(uint16_t)table_count(&p->rom,root,p->samples);return 1;
+    p->macro_count=(uint16_t)table_count(&p->rom,root,p->macros);p->sample_count=(uint16_t)table_count(&p->rom,root,p->samples);
+    // The macros' code: from the first macro to the next section (the root's second pointer), or the
+    // cart's end. Harry Potter CoS's macros GOTO into each other's tails (shared code).
+    p->macro_lo=relative(&p->rom,root,p->macros,1);
+    uint32_t section=relative(&p->rom,root,root+4,1);
+    p->macro_hi=section>p->macro_lo?section:p->rom.base+p->rom.size;
+    return 1;
 }
 static int load_entry(MsPlayer *p,MsTrack *t,uint32_t seq,uint32_t base_time,int immediate){
     const MsRom *r=&p->rom;if(!ok(r,seq,8))return fail(p,seq);
@@ -156,6 +191,9 @@ static int start_sample(MsPlayer *p,unsigned i,unsigned id,uint32_t start){
     MsVoice *v=&p->voices[i];const MsRom *r=&p->rom;
     if(id>=p->sample_count){reject(p,i,MS_WHY_SAMPLE,p->samples);return 0;}
     uint32_t a=relative(r,p->song.root,p->samples+id*4,16);
+    // A waveform for the wave channel: started on voice 2, or flagged at +11 (Harry Potter CoS's 16- and
+    // 32-byte samples). Its first 16 bytes are the 32 4-bit steps the channel loops.
+    if(a&&(v->hw==2||b(r,a+11)==1)&&ok(r,a+16,16)){v->wave=a+16;psg_claim(p,i,2);return 1;}
     if(!a||!sample_valid(r,a)){reject(p,i,MS_WHY_SAMPLE,a);return 0;}
     uint32_t size=w(r,a),data=a+16;int32_t loop=(int32_t)w(r,a+4);
     if(size>MS_MAX_SAMPLE){reject(p,i,MS_WHY_SAMPLE,a);return 0;}
@@ -180,7 +218,7 @@ static int macro_select(MsPlayer *p,unsigned i,unsigned id){
     // Normal tables are ordered, but aliased/last macros can lack a reliable upper bound.
     if(id+1<p->macro_count){uint32_t next=relative(r,p->song.root,p->macros+(id+1)*4,1);if(next>a)end=next;}
     uint32_t section=relative(r,p->song.root,p->song.root+4,1);if(section>a&&section<end)end=section;
-    v->macro_begin=a;v->macro_end=end;v->macro_id=(uint16_t)id;v->keyoff=0;v->wait=0;
+    v->macro_begin=a;v->macro_end=end;v->macro_id=(uint16_t)id;v->keyoff=0;v->wait=0;v->hw=b(r,a);
     if(b(r,a+2)){
         // A keymap (see KEYMAPS above): entry note + key_add, played at note + transpose. The pan and
         // the other trailing bytes are ignored (bit 54 still says "approximate"). A note outside the
@@ -218,7 +256,7 @@ static void note_on(MsPlayer *p,unsigned c,unsigned note,unsigned velocity,unsig
     unsigned i=(unsigned)choice;if(p->voices[i].active)p->warnings|=MS_WARN_VOICE_LIMIT;
     off(p,i);zero(&p->voices[i],sizeof(MsVoice));MsVoice *v=&p->voices[i];
     v->active=1;v->owner=(uint8_t)c;v->note=(uint8_t)note;v->velocity=v->volume=(uint8_t)velocity;
-    v->pitch=(int32_t)note*256;v->gate_left=duration;v->age=++p->age;
+    v->pitch=(int32_t)note*256;v->gate_left=duration;v->age=++p->age;v->noise=255;
     macro_select(p,i,(unsigned)id);event(p,MS_EVENT_NOTE,((uint32_t)c<<24)|((uint32_t)note<<16)|duration);
 }
 static void macro_run(MsPlayer *p,unsigned i){
@@ -232,13 +270,24 @@ static void macro_run(MsPlayer *p,unsigned i){
         v->ip+=length;
         switch(op){
         case 0:case 1:
-            if(p->preview&&v->has_sample&&!v->released){v->tail=1;p->warnings|=MS_WARN_PREVIEW_TAIL;}else off(p,i);
+            if(p->preview&&(v->has_sample||v->psg)&&!v->released){v->tail=1;p->warnings|=MS_WARN_PREVIEW_TAIL;}else off(p,i);
             return;
+        case 2:v->volume=(uint8_t)(b(r,from+1)&127);break;           // SETVOLUME (Denki's echoes step it 127..70)
+        case 6:{                                                        // LOOP n times back to an offset
+            // flags byte, times, a byte, s16 offset from this command: Denki's arpeggios repeat this way
+            unsigned times=b(r,from+2);int32_t off=(int16_t)h(r,from+4);
+            if(v->loop_at!=from){v->loop_at=from;v->loop_left=(uint8_t)times;}
+            if(!times||v->loop_left){if(times)--v->loop_left;v->ip=branch(from,off);}else v->loop_at=0;
+            break;}
+        case 8:{                                                        // SETNOTE: absolute key, detune (cents)
+            int detune=(int8_t)b(r,from+2);v->pitch=(int32_t)b(r,from+3)*256+((detune*655)>>8);break;}
         case 4:
             if(b(r,from+1)&&!unsupported(p,i,op))return;
             v->wait=h(r,from+2);if(v->wait)return;break;
         case 9:{unsigned flags=b(r,from+1);int note=(int16_t)h(r,from+2);v->pitch=(flags&1)?note:(int32_t)v->note*256+note;break;}
-        case 13:v->ip=branch(from,(int32_t)w(r,from+2));break;
+        case 13:{uint32_t to=branch(from,(int32_t)w(r,from+2));    // GOTO, possibly into another macro
+            if(p->macro_lo&&to>=p->macro_lo&&to<p->macro_hi&&(to<v->macro_begin||to>=v->macro_end)){v->macro_begin=p->macro_lo;v->macro_end=p->macro_hi;}
+            v->ip=to;break;}
         case 15:
             if(b(r,from+1)&&!unsupported(p,i,op))return;
             if(!start_sample(p,i,h(r,from+2),w(r,from+4)))return;
@@ -261,6 +310,11 @@ static void macro_run(MsPlayer *p,unsigned i){
              v->pitch=clip(v->pitch+add*256,-32768,32767);}
             break;
         case 31:break; // documented no-op on GBA
+        case 32:{unsigned ch=psg_channel(v,0),d=b(r,from+1);           // VOICE_ON: duty 0..3, 255 by velocity
+            v->duty=(uint8_t)(d==255?v->velocity>>5:d&3);psg_claim(p,i,ch);break;}
+        case 33:v->noise=b(r,from+1);psg_claim(p,i,3);break;           // SETNOISE: the noise channel's NR43
+        case 36:v->env=(uint8_t)(b(r,from+1)&15);if(v->psg)p->psg[v->psg-1].trigger=1;break; // HARDENVELOPE
+        case 37:v->env=0;if(v->psg)p->psg[v->psg-1].trigger=1;break;  // HARDENVELOPE_OFF
         case 34:if(b(r,from+1)==255){release(p,i);return;}if(!unsupported(p,i,op))return;break;
         case 47:{unsigned base=b(r,from+1)?v->velocity:v->volume;v->volume=(uint8_t)clip((int)((base*h(r,from+4))>>8)+b(r,from+2),0,127);break;}
         default:if(!unsupported(p,i,op))return;break; // preview skips only a known, checked byte length
@@ -315,6 +369,7 @@ void ms_update(MsPlayer *p){
         if(p->hooks.done&&p->hooks.done(p->hooks.user,i)){off(p,i);continue;}
         levels(p,i);if(p->hooks.update)p->hooks.update(p->hooks.user,i,&v->pcm);
     }
+    psg_sync(p);
 }
 void ms_tick(MsPlayer *p){
     if(!p->running)return;
