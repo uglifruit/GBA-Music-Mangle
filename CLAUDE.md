@@ -188,8 +188,11 @@ an assistant.
   songs send fits; outside the map plays the nearest entry and warns (W 0x20, never seen yet).
   - Two bugs fixed with it: PLAYMACRO into a keymap ran on from ip 0 and rejected the voice (the
     `R8` everywhere), and its offset was added to the pitch as Q8 minus 60 semitones.
-  - Kits whose transposes are all 0 (Beckham's, Lady Sia's) play at note + 0, e.g. note 36 against
-    a sample rooted at 60: two octaves down. That follows the rule; whether it is right needs ears.
+  - Entry byte 4 is pan (steps of 5 across piano-like maps); byte 6 is a flag. An entry with byte 6
+    set and transpose 0 plays at its SAMPLE'S ROOT (fixed): Lady Sia's, Beckham's and Ace's kits (a
+    sample per key, all transposes 0). Andy heard Lady Sia's drums as a low thump on hardware under
+    note + 0 (2026-11-05). Flag 1 WITH a transpose (BattleBots, Spider-Man) stays note + transpose,
+    which puts those hits near their roots; flag-0 kits (Rayman, Star Wars, Incredibles) unchanged.
   - The mixes are loud now (Rayman, Incredibles, Ace peak at full scale) but clip on at most 0.03 %
     of samples.
   - **The sample root key is a byte at +10** (fixed 2026-11-03): +11 is something else (1 on Harry

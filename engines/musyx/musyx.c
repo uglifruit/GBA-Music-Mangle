@@ -223,6 +223,10 @@ static int macro_select(MsPlayer *p,unsigned i,unsigned id){
         // A keymap (see KEYMAPS above): entry note + key_add, played at note + transpose. The pan and
         // the other trailing bytes are ignored (bit 54 still says "approximate"). A note outside the
         // map plays its nearest entry (warned).
+        // An entry with byte 6 set and transpose 0 plays its sample at the sample's own key: Lady Sia's,
+        // Go! Go! Beckham's and Ace Lightning's kits are all such (a sample per key, nothing to transpose),
+        // and at note + 0 they sounded an octave or two low (Andy, on hardware, 2026-11-05). With a
+        // transpose (BattleBots, Spider-Man) byte 6 changes nothing: note + transpose is their pitch.
         if(!p->preview||!ok(r,a+4,2)){unsupported(p,i,54);off(p,i);return 0;}
         if(!unsupported(p,i,54))return 0;
         unsigned count=h(r,a+4);int k=(int)v->note+v->key_add;
@@ -230,7 +234,10 @@ static int macro_select(MsPlayer *p,unsigned i,unsigned id){
         if(k<0||k>=(int)count){k=k<0?0:(int)count-1;p->warnings|=MS_WARN_KEYMAP_RANGE;}
         uint32_t item=a+6+(uint32_t)k*8u;
         if(!ok(r,item,8)){reject(p,i,MS_WHY_MACRO,item);return 0;}
-        v->pitch=(int32_t)v->note*256+(int16_t)h(r,item+2);v->ip=0;v->tail=1;return start_sample(p,i,h(r,item),0);
+        int t=(int16_t)h(r,item+2);unsigned sid=h(r,item);
+        uint32_t sa=sid<p->sample_count?relative(r,p->song.root,p->samples+sid*4,16):0;
+        v->pitch=(b(r,item+6)&&!t&&sa)?(int32_t)b(r,sa+10)*256:(int32_t)v->note*256+t;
+        v->ip=0;v->tail=1;return start_sample(p,i,sid,0);
     }
     v->ip=a+4;return 1;
 }
