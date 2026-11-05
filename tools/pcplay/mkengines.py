@@ -7,6 +7,9 @@
                restart lies past its order list, with what real carts have and the first discovery
                refused: an instrument with no envelope points (count stored as 255), a sample-map
                entry with a junk high byte, a sample panned past +-64
+  gax2.gba     a GAX 2 song: a song entry of four handlers (dummy, header, the channel's pattern
+               table, dummy), the V2 header, a V2 instrument (one wave, envelope at +124, performance
+               rows at +136), an empty sample 0 and a SIGNED sample, and "GAX Sound Engine v2.01a"
   mixed.gba    the MP2K test cart (mktestrom.py's) with the GAX song and text added: a cart that
                uses two engines, for the scan's multi-engine tables
 
@@ -49,6 +52,37 @@ def gax_block(rom, o):
         rom[o + 0x5000 + i] = (16 + (i % 32) * 7) & 255
     text = b'GAX Sound Engine 3.05 (synthetic test)\0'
     rom[o + 0x6001:o + 0x6001 + len(text)] = text      # deliberately unaligned
+
+
+def gax2_block(rom, o):
+    """GAX 2: song entry at o+0x7000 (handlers at o+0x7100..), V2 header at o+0x1000, pattern table at
+    o+0x4000, sequence at o+0x2000, instrument table o+0x3000 (instrument at o+0x3300), samples o+0x3100."""
+    put16(rom, o + 0x1000, 1); put16(rom, o + 0x1002, 8); put16(rom, o + 0x1004, 2); put16(rom, o + 0x1008, 256)
+    put32(rom, o + 0x100C, BASE + o + 0x2000); put32(rom, o + 0x1010, BASE + o + 0x3000)
+    put32(rom, o + 0x1014, BASE + o + 0x3100); put16(rom, o + 0x1018, 15769)
+    rom[o + 0x4006] = 12                                  # second order transposed an octave
+    rom[o + 0x2000:o + 0x2005] = bytes([0, 49 | 128, 1, 0xFF, 7])
+    put32(rom, o + 0x3000, BASE + o + 0x3200); put32(rom, o + 0x3004, BASE + o + 0x3300)
+    i = o + 0x3300                                        # the V2 instrument
+    rom[i + 1] = 1                                        # sample 1
+    put32(rom, i + 16, 0); put32(rom, i + 20, 0); put32(rom, i + 24, 256)   # start, loop, end
+    put32(rom, i + 124, BASE + o + 0x3500); put32(rom, i + 128, BASE + o + 0x3500)
+    rom[i + 132] = 0; rom[i + 133] = 1; put32(rom, i + 136, BASE + o + 0x3600)
+    rom[o + 0x3500] = 1; rom[o + 0x3501] = rom[o + 0x3502] = rom[o + 0x3503] = 255; rom[o + 0x3508] = 255
+    rom[o + 0x3600] = 2; rom[o + 0x3602] = 1              # performance row: note 2 (no shift), slot 1
+    put32(rom, o + 0x3100, 0); put32(rom, o + 0x3104, 0)  # sample 0 empty, as V2 carts have it
+    put32(rom, o + 0x3108, BASE + o + 0x5000); put32(rom, o + 0x310C, 256)
+    for k in range(257):
+        rom[o + 0x5000 + k] = ((k % 32) * 7 - 112) & 255   # a SIGNED saw
+    code = BASE + o + 0x6801                              # handlers' code pointers (Thumb: odd)
+    for n, data in enumerate((o + 0x7400, o + 0x1000, o + 0x4000, o + 0x7400)):
+        hd = o + 0x7100 + n * 0x20
+        for k, v in enumerate((code, code + 4, code + 8, 1, 0, 0x4C, BASE + data)):
+            put32(rom, hd + 4 * k, v)
+        put32(rom, o + 0x7004 + 4 * n, BASE + hd)
+    put32(rom, o + 0x7000, 4)
+    text = b'GAX Sound Engine v2.01a (synthetic test)\0'
+    rom[o + 0x6001:o + 0x6001 + len(text)] = text
 
 
 def kr_sample(rom, a, pan=0):
@@ -124,6 +158,10 @@ def main():
     header(rom, b'KRAWALL TWO', b'KRW2')
     krawall2_block(rom, 0x1000)
     (out / 'krawall2.gba').write_bytes(rom)
+    rom = bytearray(0x10000)
+    header(rom, b'GAX TWO TEST', b'GAX2')
+    gax2_block(rom, 0x1000)
+    (out / 'gax2.gba').write_bytes(rom)
     if len(sys.argv) > 2:
         rom = bytearray(pathlib.Path(sys.argv[2]).read_bytes())
         o = 0xC0000

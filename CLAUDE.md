@@ -226,11 +226,13 @@ an assistant.
 - modtest takes a sixth cart, `eng/krawall2.gba` (mkengines.py): sub-songs, the 255 envelope, the
   junk byte, a wide pan. 189 checks.
 
-- **GAX 2 (feasibility, 2026-11-03): see docs/ENGINES.md "GAX 2 feasibility".** In short: V3's
-  sequencer inside handler structs; instruments at new offsets; SIGNED samples. Scratch tools (not in
-  the repo): gax2find.py (song entries), gax2v3.py (a test copy with V3 headers appended and the
-  version text changed so the scan accepts it), gax2exp.py (gax.c with V2 instrument offsets). Not
-  implemented in the player yet.
+- **GAX 2 (implemented 2026-11-05): see docs/ENGINES.md "GAX 2".** V3's sequencer inside handler
+  structs; instruments at new offsets; SIGNED samples. gax.c V2 mode, eng_gax.c `gx2_words` discovery
+  (only when `gax_major() == 2`), `s_v2` means "this cart's songs are V2 entries". scan_install runs
+  `sniff_pass()` before rerunning GAX discovery (a saved-slot boot skips the signature pass, and the
+  version decides V2 / V3). modtest's 7th cart is mkengines.py's gax2.gba (207 checks). Andy judged
+  scratch renders right by ear; Tony Hawk 3 clipped in the trial player (no half volume) but is at
+  0.13 % at worst in ours.
 
 ## Booting from a saved slot (patch v4, 2026-10-27)
 

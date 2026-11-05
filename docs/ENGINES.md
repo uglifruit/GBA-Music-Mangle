@@ -5,7 +5,19 @@ and GAX are not yet. This document says what the engines share, what has to happ
 turns out to use one of them, and how the card stays one instrument with one UI whichever engine
 is playing. "As built" below records where the build differs from the design.
 
-## GAX 2 feasibility (2026-11-03)
+## GAX 2 (feasibility 2026-11-03, implemented 2026-11-05)
+
+**Implemented:** gax.c has a V2 mode (`gx_v2_entry`, `gx_start_v2`; channel pattern tables in
+`GxPlayer.chan[]`, the V2 instrument offsets); eng_gax.c finds song entries when the version text
+says 2.x (`gx2_words`, an IWRAM loop that tests only a count 4..40 followed by a cart pointer), keeps
+the entries in `s_songs`, and plays them with signed samples. A boot from a saved slot runs the sniff
+first so the version is known. Found: Tang Tang 10, Spider-Man: Mysterio's Menace 22, Tony Hawk 3 14,
+Bruce Lee 12. Andy judged scratch renders of all four "right" by ear (2026-11-05). Levels: at the
+payload's half volume Tony Hawk 3 is the hottest cart (0.13 % of samples at full scale on its worst
+song, against 12 % in the trial player); GAX 2 stays at GAX 3's level. Still unread: the second
+envelope (+128) and the +36 word. GAX 1.99 carts are not covered.
+
+### The study
 
 Studied on dumps of Tang Tang (2.01a), Spider-Man: Mysterio's Menace (2.01b), Tony Hawk's Pro Skater 3
 (2.11) and Bruce Lee: Return of the Legend (2.35), against loveemu's research note (V2 section).
@@ -28,7 +40,7 @@ Studied on dumps of Tang Tang (2.01a), Spider-Man: Mysterio's Menace (2.01b), To
 - **Samples are SIGNED** (mean step 8-28 read signed against 37-83 unsigned; Finding Nemo's GAX 3 is
   the reverse). The note's comment that samples are unsigned from GAX 2 on is wrong for these. The
   sample table's entry 0 can be empty (address 0), which V3 discovery refuses.
-- **Still to do for real support:** discovery by handler structure (it needs Thumb pointers, so it is
+- **What real support needed (done 2026-11-05, above):** discovery by handler structure (it needs Thumb pointers, so it is
   its own pass), a V2 mode in gax.c (channel table pointers, the instrument offsets, the second
   envelope and +36 understood or ignored), signed samples for V2 tables, and the levels (the scratch
   renders run hot: Tony Hawk 3 at full scale on 12 % of samples, before the payload's half volume).

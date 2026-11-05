@@ -57,7 +57,7 @@ engine row gives each engine's own diagnostics; note it when reporting a song:
 
 | Engine | CAL row | Means |
 |---|---|---|
-| GAX | `S` songs, `OLD` how many the first, stricter scan would have kept, `FX` effect banks, then the check that turned away the most near-misses (`SHP` shape, `NOT` notes, `INS` instruments, `SMP` samples, `CHN` channels) | Tells a cart with few songs found where the rest went. `2.X UNSUPPORTED`: the cart's GAX is version 2, whose songs this can't read yet |
+| GAX | `S` songs, `OLD` how many the first, stricter scan would have kept, `FX` effect banks, then the check that turned away the most near-misses (`SHP` shape, `NOT` notes, `INS` instruments, `SMP` samples, `CHN` channels) | Tells a cart with few songs found where the rest went. A GAX 2 cart (2001-02: Tang Tang, Tony Hawk's Pro Skater 3, Bruce Lee ...) shows `V2` and its song count instead |
 | Krawall | `M` modules, `S`/`I` the sample and instrument banks found, unknown effects, error | Two more rows choose its **sample and instrument banks**: Krawall stores them apart from the songs, and the scan takes the largest of each. UP/DOWN picks the row, LEFT/RIGHT steps through the other candidates; the choice is saved with the patch |
 | MusyX | unknown commands, `W` warnings (20: a note fell outside its drum kit and took the nearest entry), `R` why notes were turned away (1 no voices, 2 no such instrument, 4 bad sample, 8 bad macro or keymap), error, `PSG` | `PSG`: the song uses the Game Boy sound channels for some parts (square waves, the wave channel, noise). They play (since 2026-11-03), but how MusyX drives them was worked out from the carts' data, so some arpeggios, envelopes or octaves may be off |
 
@@ -72,8 +72,8 @@ When no engine's songs are found, the scan says what the cart uses instead, and 
 | ENGINE: XM x*n* | *n* whole FastTracker 2 modules stored in the cart, with the first one's name. |
 | ENGINE UNKNOWN | No known signature: an in-house engine, or one that leaves no text behind. |
 
-A GAX or Krawall name with no songs found adds a red line saying why: "GAX 2.X: NOT SUPPORTED YET"
-(GAX version 2, as in Tang Tang, stores its songs differently), or what the Krawall search found
+A GAX or Krawall name with no songs found adds a red line saying why: "GAX: NO SONGS MATCHED" (with
+the check that turned the most away), "GAX 2: NO SONG ENTRIES MATCHED", or what the Krawall search found
 ("NO SAMPLE BANK", with its counts). XM modules and unnamed engines don't play. If a game you know uses MP2K
 reports nothing, try SET > CART SPEED SAFE and SET > RESCAN CART. The CAL page repeats the engine
 line. [docs/ENGINES.md](docs/ENGINES.md) has how the engines fit together.
@@ -320,7 +320,7 @@ python -I engines/musyx/tests/make_demo.py msdemo.gba  # a small authored MusyX 
 tools/pcplay/build/pcplay msdemo.gba --song 0 --out musyx.wav
 python -I tools/pcplay/mkengines.py eng test.gba     # synthetic GAX, Krawall, and MP2K + GAX carts
 tools/pcplay/build/pcplay eng/mixed.gba --songtable 3 --songs   # the GAX table of the mixed cart
-tools/pcplay/build/modtest test.gba msdemo.gba eng/gax.gba eng/krawall.gba eng/mixed.gba eng/krawall2.gba
+tools/pcplay/build/modtest test.gba msdemo.gba eng/gax.gba eng/krawall.gba eng/mixed.gba eng/krawall2.gba eng/gax2.gba
 tools/pcplay/build/pcplay yourgame.gba --full --songs          # every engine, as RESCAN FULL
 ```
 `pcplay` renders a song with the payload's own engine, the PSG voices (squares, wave, noise) through

@@ -192,6 +192,18 @@ static int entry_ok(uint32_t e, int *tracks)
     return scan_header_ok(rom_u32(SONG_HEADER(e)), tracks);
 }
 
+// The sniff alone, over the whole cart: what the signature pass reads of other engines' text, for a
+// boot from a saved slot, which skips that pass. GAX's discovery needs it: the version text says
+// whether the cart's songs are GAX 2 or GAX 3 (2026-11-05).
+static void sniff_pass(void)
+{
+    for (uint32_t base = ROM_BASE; base < g_romEnd; base += CHUNK) {
+        uint32_t end = base + CHUNK;
+        if (end > g_romEnd) end = g_romEnd;
+        for (uint32_t a = base; (a = next_push_lr(a, end)) < end; a += 4) {}
+    }
+}
+
 static int find_signature(void)
 {
     for (uint32_t base = ROM_BASE; base < g_romEnd; base += CHUNK) {
@@ -532,7 +544,7 @@ int scan_install(int n, const uint32_t *addr, const uint16_t *rate, const uint8_
         t->soundMode    = 0;
         t->gameRate     = (rate[i] >= 5734 && rate[i] <= 42048) ? rate[i] : 13379;
     }
-    if (rerun & (1u << ENG_ID_GAX))     engine_pass(ENG_ID_GAX);
+    if (rerun & (1u << ENG_ID_GAX))     { sniff_pass(); engine_pass(ENG_ID_GAX); }
     if (rerun & (1u << ENG_ID_KRAWALL)) engine_pass(ENG_ID_KRAWALL);
     for (int i = 0; i < g_tableCount; i++) g_tables[i].method = SCAN_SAVED;
     if (drop_empty() == 0) {

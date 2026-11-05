@@ -8,6 +8,10 @@
 //
 // GAX's voices are its channels, and its seek re-decodes from the pattern start silencing them, so
 // RESTART BAR is "back to the order and row the section began on" with the notes cut at the jump.
+//
+// GAX 2 (2.01 .. 2.35, since 2026-11-05): the cart's version text says which. Its songs are found by
+// their song entries (gax.h, gx_v2_entry) instead of V3 headers, s_songs holds the entry addresses,
+// and they play in gax.c's V2 mode with SIGNED samples (V3's are unsigned).
 
 #include "eng_core.h"
 #include "gba.h"
@@ -19,6 +23,7 @@
 #include "../engines/gax/gax.h"
 
 #define GX_MAX_SONGS 128
+#define GX2_VOL_SHIFT 1               // GAX 2 mix level (tuned on real carts below)
 
 static GxPlayer  s_gx;
 static EngMixCtx s_mix;
@@ -33,7 +38,7 @@ static uint8_t   s_snapSpeed[2], s_snapPhase;
 static uint32_t    s_songs[GX_MAX_SONGS];
 static uint16_t    s_songCount, s_strictKeep;
 static GxScanStats s_stats;
-static uint8_t     s_v2;               // the cart's GAX is 2.x: a header layout this player cannot read
+static uint8_t     s_v2;               // the cart's GAX is 2.x: s_songs are V2 song entries
 
 static void copy_bytes(void *dst, const void *src, unsigned size)
 {
@@ -115,7 +120,14 @@ static int start(int n)
     if (g_songIx[n] >= s_songCount) return 0;
     sync();
     s_gx.repeat = (uint8_t)(g_plRepeat && !g_plOnce);
-    if (!gx_start(&s_gx, s_songs[g_songIx[n]])) return 0;
+    s_mix.flags = s_v2 ? 0 : MIX_F_UNSIGNED;         // GAX 2 samples are signed, GAX 3's offset-binary
+    s_mix.volShift = s_v2 ? GX2_VOL_SHIFT : 1;
+    if (s_v2) {
+        EngRom r = eng_cart_rom();
+        uint32_t hdr, chans[GX_CHANNELS];
+        unsigned ch = gx_v2_entry(&r, s_songs[g_songIx[n]], &hdr, chans, GX_CHANNELS);
+        if (!ch || !gx_start_v2(&s_gx, hdr, chans, ch)) return 0;
+    } else if (!gx_start(&s_gx, s_songs[g_songIx[n]])) return 0;
     copy_bytes(&s_last, &s_gx.mods, sizeof(GxMods));
     s_frameAcc = 256;                  // the first tick plays its row at once
     return 1;
@@ -184,9 +196,10 @@ static void diag(char *t, int a)
     // S songs, OLD how many the first (stricter) scan would have kept, FX banks, then the check
     // that turned away the most near misses, and the decoder's own error flag.
     static const char *stage[GX_REJECT_COUNT] = { "", "", "", "SHP", "NOT", "INS", "SMP", "CHN" };
-    if (s_v2) {
-        const char *m = " 2.X UNSUPPORTED";
-        while (*m) t[a++] = *m++;
+    if (s_v2) {                                      // GAX 2: its songs, and the decoder's error flag
+        t[a++] = ' '; t[a++] = 'V'; t[a++] = '2';
+        t[a++] = ' '; t[a++] = 'S'; a = eng_put_hex(t, a, s_songCount, 2);
+        t[a++] = ' '; t[a++] = 'E'; t[a++] = s_gx.error ? '1' : '0';
         t[a] = 0;
         return;
     }
@@ -208,7 +221,7 @@ static int put(char *t, int a, const char *s) { while (*s) t[a++] = *s++; t[a] =
 
 int gx_scan_note(char *t)
 {
-    if (s_v2) { put(t, 0, "GAX 2.X: NOT SUPPORTED YET"); return 1; }
+    if (s_v2) { put(t, 0, "GAX 2: NO SONG ENTRIES MATCHED"); return 1; }
     int a = put(t, 0, "GAX: NO SONGS MATCHED");
     unsigned top = 0;
     for (unsigned k = GX_REJECT_SHAPE; k < GX_REJECT_COUNT; k++) if (s_stats.count[k] > s_stats.count[top]) top = k;
@@ -273,10 +286,40 @@ IWRAM_CODE static void gx_words(const EngRom *r, uint32_t begin, uint32_t end)
     }
 }
 
+// The version the sniff read; see gax_major() below.
+static int gax_major(void);
+
+// GAX 2's word loop, in IWRAM: a song entry is a count 4..40 followed by a pointer into the cart, and
+// only those words get the full check (gx_v2_entry, which follows the handlers). Entries are kept once
+// each by their header (a song may be reachable from more than one entry).
+IWRAM_CODE static void gx2_words(const EngRom *r, uint32_t begin, uint32_t end)
+{
+    uint32_t base = r->base, size = r->size;
+    if (size < 8) return;
+    uint32_t stop = base + size - 4;
+    if (end > stop) end = stop;
+    if (end <= begin) return;
+    const volatile uint32_t *p = (const volatile uint32_t *)ROM_PTR(begin);
+    uint32_t n = (end - begin) >> 2;
+    for (uint32_t i = 0; i < n && s_songCount < GX_MAX_SONGS; i++) {
+        uint32_t c = p[i];
+        if (c - 4u > 36u || p[i + 1] - base >= size) continue;
+        uint32_t hdr, chans[GX_CHANNELS], a = begin + (i << 2);
+        if (!gx_v2_entry(r, a, &hdr, chans, GX_CHANNELS)) continue;
+        int seen = 0;
+        for (unsigned k = 0; k < s_songCount && !seen; k++) {
+            uint32_t h2, c2[GX_CHANNELS];
+            if (gx_v2_entry(r, s_songs[k], &h2, c2, GX_CHANNELS) && h2 == hdr) seen = 1;
+        }
+        if (!seen) s_songs[s_songCount++] = a;
+    }
+}
+
 void gx_discover(uint32_t begin, uint32_t end)
 {
     EngRom r = eng_cart_rom();
-    gx_words(&r, begin, end);
+    if (gax_major() == 2) { s_v2 = 1; gx2_words(&r, begin, end); }
+    else gx_words(&r, begin, end);
 }
 
 // The version the sniff read ("GAX Sound Engine 3.05", "GAX ENGINE V3.05"): 2.x uses another
@@ -292,8 +335,8 @@ static int gax_major(void)
 void gx_discover_finish(void)
 {
     EngRom r = eng_cart_rom();
-    if (gax_major() == 2) { s_v2 = 1; return; }
-    for (unsigned i = 0; i < s_songCount; i++) if (!gx_strict_reason(&r, s_songs[i])) s_strictKeep++;
+    if (gax_major() == 2) s_v2 = 1;
+    else for (unsigned i = 0; i < s_songCount; i++) if (!gx_strict_reason(&r, s_songs[i])) s_strictKeep++;
     if (s_songCount) scan_add_table(ENG_ID_GAX, s_songs[0]);
 }
 
@@ -303,8 +346,13 @@ int gx_table_songs(const ScanResult *t, uint16_t *ix, uint8_t *kind, int max)
 {
     (void)t;
     int k = 0;
+    EngRom r = eng_cart_rom();
     for (unsigned i = 0; i < s_songCount && k < max; i++) {
         uint32_t a = s_songs[i];
+        if (s_v2) {                                  // the entry's header
+            uint32_t chans[GX_CHANNELS];
+            if (!gx_v2_entry(&r, s_songs[i], &a, chans, GX_CHANNELS)) continue;
+        }
         uint32_t ticks = (uint32_t)rom_u16(a + 2) * rom_u16(a + 4) * 6u;
         ix[k] = (uint16_t)i;
         kind[k++] = eng_kind(ticks, 1);

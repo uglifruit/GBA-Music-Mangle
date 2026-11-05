@@ -96,7 +96,7 @@ static int position(GxPlayer *p,unsigned order,unsigned row){
     if(order>=p->orders||row>=p->rows)return 0;
     p->order=order;p->row=row;p->wait=0;p->hold_rows=0;p->break_pattern=0;
     for(unsigned c=0;c<p->channels;++c){
-        GxTrack *t=&p->tracks[c];uint32_t seq=w(&p->rom,p->header+32+c*4);
+        GxTrack *t=&p->tracks[c];uint32_t seq=p->chan[c];
         uint32_t a=p->patterns+h(&p->rom,seq+order*4);
         if(!ok(&p->rom,a,1)||b(&p->rom,a)>1)return fail(p,a);
         t->transpose=(int8_t)b(&p->rom,seq+order*4+2);t->pattern_empty=b(&p->rom,a);t->stream=a+1;t->rest=0;
@@ -110,8 +110,7 @@ int gx_seek(GxPlayer *p,unsigned order,unsigned row){
     for(unsigned c=0;c<GX_CHANNELS;++c)off(p,c);
     return 1;
 }
-int gx_start(GxPlayer *p,uint32_t header){
-    if(!gx_song_valid(&p->rom,header))return 0;
+static int start_common(GxPlayer *p,uint32_t header){
     gx_stop(p);zero(p->tracks,sizeof(p->tracks));zero(p->unsupported,sizeof(p->unsupported));
     p->header=header;p->channels=h(&p->rom,header);p->rows=h(&p->rom,header+2);p->orders=h(&p->rom,header+4);
     p->restart=h(&p->rom,header+6);p->volume=h(&p->rom,header+8);p->mixing_rate=h(&p->rom,header+24);
@@ -121,7 +120,54 @@ int gx_start(GxPlayer *p,uint32_t header){
     if(!position(p,0,0))return fail(p,header);
     return 1;
 }
-int gx_restart(GxPlayer *p){return gx_start(p,p->header);}
+int gx_start(GxPlayer *p,uint32_t header){
+    if(!gx_song_valid(&p->rom,header))return 0;
+    unsigned ch=h(&p->rom,header);
+    for(unsigned c=0;c<ch&&c<GX_CHANNELS;++c)p->chan[c]=w(&p->rom,header+32+c*4);
+    p->v2=0;return start_common(p,header);
+}
+// ---- GAX 2 ----
+static int v2_handler(const GxRom *r,uint32_t a,uint32_t *data){
+    if((a&3)||!ok(r,a,28))return 0;
+    for(unsigned k=0;k<3;++k){uint32_t f=w(r,a+4*k);if(!(f&1)||!ok(r,f&~1u,2))return 0;}
+    uint32_t cnt=w(r,a+12),rel=w(r,a+16),f14=w(r,a+20),d=w(r,a+24);
+    if(cnt>=64||(rel&&!ok(r,rel,1))||f14>=0x10000||(d&3)||!ok(r,d,4))return 0;
+    *data=d;return 1;
+}
+// A V2 song header with channels: the V3 bounds, the sample table's entry 0 may be empty.
+static int v2_header(const GxRom *r,uint32_t a){
+    if((a&3)||!ok(r,a,28))return 0;
+    unsigned ch=h(r,a),rows=h(r,a+2),orders=h(r,a+4);
+    uint32_t notes=w(r,a+12),ins=w(r,a+16),samples=w(r,a+20);
+    return ch&&ch<=GX_CHANNELS&&rows&&rows<=256&&orders&&orders<=1024&&ok(r,notes,1)&&
+        !(ins&3)&&ok(r,ins,4)&&ok(r,w(r,ins),1)&&!(samples&3)&&ok(r,samples,8);
+}
+unsigned gx_v2_entry(const GxRom *r,uint32_t a,uint32_t *header,uint32_t *chans,unsigned cap){
+    if((a&3)||!ok(r,a,4))return 0;
+    uint32_t n=w(r,a);if(n<4||n>40||!ok(r,a+4,n*4))return 0;
+    unsigned handlers=0,ch=0,got=0;uint32_t hdr=0;
+    for(unsigned i=0;i<n;++i){
+        uint32_t d;if(!v2_handler(r,w(r,a+4+4*i),&d))continue;
+        ++handlers;
+        if(!hdr){if(v2_header(r,d)){hdr=d;ch=h(r,d);}continue;}
+        if(got<ch&&got<cap){
+            if(!ok(r,d,(uint32_t)h(r,hdr+4)*4))return 0;   // a pattern table: orders entries
+            chans[got++]=d;
+        }
+    }
+    if(handlers<4||handlers+1<n||!hdr||got<ch)return 0;
+    *header=hdr;return ch;
+}
+int gx_start_v2(GxPlayer *p,uint32_t header,const uint32_t *chans,unsigned n){
+    if(!v2_header(&p->rom,header)||n!=h(&p->rom,header)||n>GX_CHANNELS)return 0;
+    for(unsigned c=0;c<n;++c){if((chans[c]&3)||!ok(&p->rom,chans[c],(uint32_t)h(&p->rom,header+4)*4))return 0;p->chan[c]=chans[c];}
+    p->v2=1;return start_common(p,header);
+}
+int gx_restart(GxPlayer *p){
+    if(!p->v2)return gx_start(p,p->header);
+    uint32_t chans[GX_CHANNELS];for(unsigned c=0;c<p->channels;++c)chans[c]=p->chan[c];
+    return gx_start_v2(p,p->header,chans,p->channels);
+}
 uint32_t gx_frame_hz_q16(const GxPlayer *p){return ((uint32_t)p->mods.tempo*15290u);}// 59.7275 Hz * 65536 / 256
 static unsigned random8(GxPlayer *p){p->rng^=p->rng<<13;p->rng^=p->rng>>17;p->rng^=p->rng<<5;return p->rng&255;}
 // Equal temperament: GAX pitch 48 is 8363 Hz. Lookup values are mathematical Q16 ratios.
@@ -168,13 +214,15 @@ static int instrument(GxPlayer *p,unsigned c,unsigned id,unsigned note){
     if(selected<=0||selected>255){off(p,c);return 1;}
     uint32_t entry=p->instruments+4u*(unsigned)selected+(int32_t)p->mods.table_offset;
     if(!ok(r,entry,4)){off(p,c);return 1;}
-    uint32_t a=w(r,entry);if(!ok(r,a,24)||b(r,a)){off(p,c);return 1;}
-    uint32_t env=w(r,a+12),perf=w(r,a+20);unsigned count=b(r,a+17);
+    // V3: envelope +12, performance speed / count +16 / +17, rows +20, waves from +24. V2: one wave,
+    // envelope +124, speed / count +132 / +133, rows +136 (a second envelope at +128 is not used).
+    uint32_t a=w(r,entry);if(!ok(r,a,p->v2?140:24)||b(r,a)){off(p,c);return 1;}
+    uint32_t env=w(r,a+(p->v2?124:12)),perf=w(r,a+(p->v2?136:20));unsigned count=b(r,a+(p->v2?133:17));
     if(!count||count>128||!ok(r,perf,count*8)||!ok(r,env,4)){off(p,c);return 1;}
     unsigned points=b(r,env);if(!points||points>64||!ok(r,env+4,points*8)){off(p,c);return 1;}
     for(unsigned i=1;i<points;++i)if(h(r,env+4+i*8)<=h(r,env+4+(i-1)*8)){off(p,c);return 1;}
     off(p,c);t->instrument=a;t->env=env;t->perf=perf;t->perf_count=count;t->perf_index=0;
-    t->perf_speed=b(r,a+16);t->perf_wait=0;t->env_time=0;t->released=0;t->volume=t->perf_volume=255;
+    t->perf_speed=b(r,a+(p->v2?132:16));t->perf_wait=0;t->env_time=0;t->released=0;t->volume=t->perf_volume=255;
     t->env_volume=b(r,env+8);t->pitch=((int)note-2)*256;t->perf_pitch=0;t->perf_slide=t->perf_vol_slide=0;
     t->fixed=t->has_wave=0;t->fine_tune=0;t->active=t->gate=1;t->slot=255;
     if(b(r,a+8)||b(r,a+9)||b(r,a+10))unsupported(p,GX_FEATURE_VIBRATO);
@@ -184,25 +232,28 @@ static int wave(GxPlayer *p,unsigned c,unsigned slot){
     GxTrack *t=&p->tracks[c];const GxRom *r=&p->rom;
     if(slot>=4){off(p,c);return 0;}
     unsigned id=b(r,t->instrument+1+slot);if(!id){off(p,c);return 0;}
-    uint32_t param=t->instrument+24;
-    for(unsigned i=0;i<slot;++i)if(b(r,t->instrument+1+i))param+=24;
+    // A wave's settings: V3 24 bytes from +24 per used slot {fine s16, modulation, ping-pong, start,
+    // loop, end}; V2 one wave, start / loop / end at +16 / +20 / +24, no fine tune.
+    uint32_t param=t->instrument+24,start_at=param+4,loop_at=param+8,end_at=param+12;
+    if(p->v2){if(slot){off(p,c);return 0;}start_at=t->instrument+16;loop_at=t->instrument+20;end_at=t->instrument+24;}
+    else for(unsigned i=0;i<slot;++i)if(b(r,t->instrument+1+i)){param+=24;start_at+=24;loop_at+=24;end_at+=24;}
     uint32_t rec=p->samples+id*8;
     if(!ok(r,param,24)||!ok(r,rec,8)){off(p,c);return 0;}
     uint32_t data=w(r,rec),size=w(r,rec+4);
     if(!size||size>GX_MAX_SAMPLE||!ok(r,data,size+1)){off(p,c);return 0;}
-    if(b(r,param+2))unsupported(p,GX_FEATURE_MODULATION);
-    if(b(r,param+3))unsupported(p,GX_FEATURE_PINGPONG);
-    unsigned end=w(r,param+12),loop=w(r,param+8);
+    if(!p->v2&&b(r,param+2))unsupported(p,GX_FEATURE_MODULATION);
+    if(!p->v2&&b(r,param+3))unsupported(p,GX_FEATURE_PINGPONG);
+    unsigned end=w(r,end_at),loop=w(r,loop_at);
     if(end){if(end>size||loop>=end){off(p,c);return 0;}size=end;}
     t->voice.loop=end?loop:GX_NOLOOP;
     unsigned chop=(size*p->mods.sample_end)>>8;size-=chop;
     if(!size){off(p,c);return 0;}if(t->voice.loop>=size)t->voice.loop=GX_NOLOOP;
     data+=(uint32_t)p->mods.scrub;if(!ok(r,data,size+1)){off(p,c);return 0;}
     t->voice.data=data;t->voice.size=size;
-    uint32_t start=w(r,param+4),extra=(size*p->mods.sample_start)>>8;
+    uint32_t start=w(r,start_at),extra=(size*p->mods.sample_start)>>8;
     if(start>=size||extra>=size-start)start=size-1;else start+=extra;
     t->voice.start=start;t->voice.reverse=random8(p)<p->mods.reverse_chance;
-    t->fine_tune=(int16_t)h(r,param)*8;t->slot=slot;t->has_wave=1;
+    t->fine_tune=p->v2?0:(int16_t)h(r,param)*8;t->slot=slot;t->has_wave=1;
     levels(p,c);
     if(p->hooks.note)p->hooks.note(p->hooks.user,c,&t->voice);
     if(!valid_voice(p,&t->voice)){off(p,c);return 0;}

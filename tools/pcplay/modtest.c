@@ -768,6 +768,23 @@ int main(int argc, char **argv)
     for (int c = 0; c < 3 && argc > 2 + c; c++) engine_checks(argv[2 + c], want[c]);
     if (argc > 5 && load_cart(argv[5])) mixed_checks();
     if (argc > 6) krawall_songs_checks(argv[6]);
+    if (argc > 7) {                                   // GAX 2 (2026-11-05): mkengines.py's gax2.gba
+        engine_checks(argv[7], ENG_ID_GAX);
+        char d[48];
+        eng_diag(d);
+        CHECK(strstr(d, " V2 ") != NULL && strstr(d, " E0") != NULL, "GAX 2 cart plays through the V2 path: %s", d);
+        play(0);
+        int ch = sounding();
+        CHECK(ch >= 0 && !(g_mix[ch].flags & MIX_F_UNSIGNED), "GAX 2 samples mix signed (channel %d)", ch);
+        g_eng->stop();
+        // A boot from a saved slot skips the signature pass; GAX's rediscovery still learns the version.
+        uint32_t addr[1] = { g_scan.songTable };
+        uint16_t rate[1] = { 0 };
+        uint8_t gx[1] = { ENG_ID_GAX };
+        int songs = g_songCount;
+        CHECK(scan_install(1, addr, rate, gx) == 1 && g_scan.engine == ENG_ID_GAX && g_songCount == songs,
+              "GAX 2 table from a saved slot: %u songs (want %d)", g_songCount, songs);
+    }
 
     printf("modtest: %d passed, %d failed  (Patch is %u bytes)\n", s_pass, s_fail, (unsigned)sizeof(Patch));
     return s_fail ? 1 : 0;

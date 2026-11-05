@@ -42,8 +42,9 @@ typedef struct {
     GxRom rom;GxHooks hooks;GxMods mods;GxTrack tracks[GX_CHANNELS];
     uint32_t header,patterns,instruments,samples,frames,loops,rng;
     uint32_t unsupported[3]; // IDs 0..15 pattern, 32..47 perf, 64+ feature limitations
+    uint32_t chan[GX_CHANNELS]; // each channel's pattern table (V3: from the header; V2: its handler)
     uint16_t channels,rows,orders,restart,order,row,wait,volume,mixing_rate;
-    uint8_t speed[2],phase,break_pattern,hold_rows,running,repeat,error;
+    uint8_t speed[2],phase,break_pattern,hold_rows,running,repeat,error,v2;
 } GxPlayer;
 void gx_init(GxPlayer *,GxRom,const GxHooks *);
 // Header classification (gaxtapper's v3 rules). Stages a near miss can fail at, counted by
@@ -67,6 +68,14 @@ int gx_strict_reason(const GxRom *,uint32_t);
 unsigned gx_scan(const GxRom *,uint32_t begin,uint32_t end,uint32_t *out,unsigned cap);
 unsigned gx_scan_stats(const GxRom *,uint32_t begin,uint32_t end,uint32_t *out,unsigned cap,GxScanStats *);
 int gx_start(GxPlayer *,uint32_t header);
+// GAX 2 (2.01 .. 2.35; docs/ENGINES.md "GAX 2"). A song entry is a count n >= 4 and n pointers to
+// 7-word handlers {three Thumb code pointers, a count, a pointer, a number, a data pointer}: one
+// handler's data is the song header (V3's first 26 bytes, no channel pointers), the handlers after it
+// are the channels, each one's data a pattern table. Sequence data is V3's; instruments are V3's fields
+// at other offsets with one wave; samples are SIGNED (the caller sets the mixer). gx_v2_entry returns
+// the channel count and fills header / chans (cap entries), or 0 if a is not a GAX 2 song entry.
+unsigned gx_v2_entry(const GxRom *,uint32_t a,uint32_t *header,uint32_t *chans,unsigned cap);
+int gx_start_v2(GxPlayer *,uint32_t header,const uint32_t *chans,unsigned n);
 void gx_stop(GxPlayer *);
 void gx_frame(GxPlayer *); // ONE GAX control frame, nominally one GBA VBlank
 void gx_update(GxPlayer *); // no time advance: apply live mute/pitch
