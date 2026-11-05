@@ -30,7 +30,7 @@ static uint16_t  s_snapBpm;
 
 // ---- the Game Boy channels -----------------------------------------------------------------------
 
-typedef struct { uint16_t freq; uint8_t on, nrx2, duty, noise; uint32_t wave; } PsgOut;
+typedef struct { uint16_t freq; uint8_t on, nrx2, duty, noise, wave_len; uint32_t wave; } PsgOut;
 static PsgOut s_out[MS_PSG];
 static const uint8_t kNrx1[MS_PSG] = { 0x62, 0x68, 0x72, 0x78 };
 static const uint8_t kNrx2[MS_PSG] = { 0x63, 0x69, 0x73, 0x79 };
@@ -55,12 +55,24 @@ static void psg_reset(void)
     for (unsigned ch = 0; ch < MS_PSG; ch++) { psg_silence(ch); s_out[ch].wave = 0; }
 }
 
-// The 16 bytes of a waveform into wave RAM: play bank 1 while the CPU writes bank 0, as m4a does.
-static void psg_wave(uint32_t a)
+#ifdef HOST
+uint8_t g_hostWave[32];                // what both banks of wave RAM hold (pcplay's emulator reads it)
+#endif
+
+// A waveform into wave RAM. The CPU reaches the bank that is not playing: 16 bytes go to bank 0 (bank 1
+// selected, as m4a does); 32 bytes go to bank 0 then bank 1, for the 64-step mode that plays both.
+static void psg_wave(uint32_t a, unsigned len)
 {
     R8(0x70) = 0x40;
     for (unsigned k = 0; k < 16; k += 4) R32(0x90 + k) = rom_u32(a + k);
-    R8(0x70) = 0x80;
+    if (len == 32) {
+        R8(0x70) = 0x00;
+        for (unsigned k = 0; k < 16; k += 4) R32(0x90 + k) = rom_u32(a + 16 + k);
+    }
+#ifdef HOST
+    for (unsigned k = 0; k < len; k++) g_hostWave[k] = rom_u8(a + k);
+#endif
+    R8(0x70) = len == 32 ? 0xA0 : 0x80;
 }
 
 static void psg_push(void)
@@ -69,7 +81,7 @@ static void psg_push(void)
         MsPsg *s = &s_ms.psg[ch];
         PsgOut *o = &s_out[ch];
         if (!s->on) { if (o->on) psg_silence(ch); s->trigger = 0; continue; }
-        int pitch = s->pitch + (ch == 2 ? 12 * 256 : 0);    // the wave channel sounds an octave lower
+        int pitch = s->pitch;                               // one table for every channel, as m4a
         if (pitch < 0) pitch = 0;
         if (pitch > 127 * 256) pitch = 127 * 256;
         unsigned vol = s->volume >> 3, nrx2, freq;
@@ -78,11 +90,11 @@ static void psg_push(void)
         if (ch == 3) freq = s->noise != 255 ? s->noise : cgb_key_to_freq(4, pitch >> 8, 0);
         else freq = cgb_key_to_freq(ch + 1, pitch >> 8, pitch & 255) & 0x7FFu;
         int restart = s->trigger || !o->on || nrx2 != o->nrx2 || s->duty != o->duty ||
-                      (ch == 3 && freq != o->freq) || (ch == 2 && s->wave != o->wave);
+                      (ch == 3 && freq != o->freq) || (ch == 2 && (s->wave != o->wave || s->wave_len != o->wave_len));
         if (restart) {
             if (ch == 2) {
-                if (s->wave != o->wave) psg_wave(s->wave);
-                R8(0x70) = 0x80;
+                if (s->wave != o->wave || s->wave_len != o->wave_len) psg_wave(s->wave, s->wave_len);
+                R8(0x70) = s->wave_len == 32 ? 0xA0 : 0x80;
                 R8(kNrx1[ch]) = 0;
             } else {
                 R8(kNrx1[ch]) = (uint8_t)(ch < 2 ? (s->duty & 3u) << 6 : 0);
@@ -96,6 +108,7 @@ static void psg_push(void)
         }
         R8(0x81) |= (uint8_t)(0x11u << ch);
         o->on = 1; o->nrx2 = (uint8_t)nrx2; o->duty = s->duty; o->freq = (uint16_t)freq; o->wave = s->wave;
+        o->wave_len = s->wave_len;
         s->trigger = 0;
     }
 }

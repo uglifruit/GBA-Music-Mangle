@@ -22,11 +22,14 @@ static const uint8_t kDuty[4] = { 0x01, 0x81, 0x87, 0x7E };   // 12.5 %, 25 %, 5
 static const uint8_t kNrx2[4] = { 0x63, 0x69, 0x73, 0x79 }, kNrx3[4] = { 0x64, 0x6C, 0x74, 0x7C };
 static const uint8_t kNrx4[4] = { 0x65, 0x6D, 0x75, 0x7D };
 
+extern uint8_t g_hostWave[32];          // both banks of wave RAM, as eng_musyx.c's psg_wave() filled them
+
 static uint32_t tone_step(int ch)
 {
     unsigned x = R8(kNrx3[ch]) | ((R8(kNrx4[ch]) & 7u) << 8);
-    // squares: 131072 / (2048 - x) Hz over 8 steps; wave: 65536 / (2048 - x) Hz over 32 steps
-    double hz = (ch < 2 ? 131072.0 : 65536.0) / (2048 - x) * (ch < 2 ? 8 : 32);
+    // squares: 131072 / (2048 - x) Hz over 8 steps; wave: 2097152 / (2048 - x) steps a second, over
+    // 32 steps (one bank) or 64 (both, NR30 bit 5)
+    double hz = ch < 2 ? 131072.0 / (2048 - x) * 8 : 2097152.0 / (2048 - x);
     return (uint32_t)(hz * 65536.0 / AUDIO_RATE);
 }
 
@@ -80,7 +83,8 @@ void psg_emu_render(int16_t *lr, unsigned n)
                 unsigned duty = (R8(ch ? 0x68 : 0x62) >> 6) & 3;
                 amp = (kDuty[duty] >> ((c->phase >> 16) & 7) & 1) ? c->vol : -c->vol;
             } else if (ch == 2) {
-                unsigned pos = (c->phase >> 16) & 31, b = R8(0x90 + (pos >> 1));
+                unsigned big = (R8(0x70) & 0x20) != 0, pos = (c->phase >> 16) & (big ? 63 : 31);
+                unsigned b = big ? g_hostWave[pos >> 1] : R8(0x90 + (pos >> 1));
                 int s4 = (pos & 1) ? (b & 15) : (b >> 4);
                 unsigned v = (R8(0x73) >> 5) & 3;
                 amp = v ? ((s4 * 2 - 15) >> kWaveShift[v]) : 0;

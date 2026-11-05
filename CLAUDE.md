@@ -169,9 +169,15 @@ an assistant.
     s16 offset (Denki's arpeggios), 8 SETNOTE absolute key + detune (arpeggio steps 84 86 88 91; drum
     macros pin a key), 13 GOTO may land in another macro (Harry Potter's shared tails: allowed within
     the macro region, `macro_lo/hi`). GUESSES to check by ear: HARDENVELOPE's byte is step+direction
-    only (its volume nibble is always 0 in the data), volume from the note; the wave channel gets +12
-    (it sounds an octave below the squares for one register value); WAITs stay on the 96-PPQN tick
-    (arpeggios may run fast if MusyX times them per frame); only a waveform's first 16 bytes are used.
+    only (its volume nibble is always 0 in the data), volume from the note; WAITs stay on the 96-PPQN
+    tick (arpeggios may run fast if MusyX times them per frame).
+  - Fixed 2026-11-05 after Andy heard Lady Sia's first song with a wrong low part: op 9 is ADDNOTE
+    {flag, detune, semitones s8}: flag 1 adds to the played note ("org. key"), 0 to the pitch so far.
+    It had been read as an absolute pitch, so SETNOTE[01 00 e8] (note - 24) sat at the bottom of the
+    range. And the wave channel: 32-byte waveforms are 64 steps (both banks, NR30 = 0xA0), 16-byte
+    ones 32 steps; no +12 any more (one frequency table for all channels, as m4a). Lady Sia's song 2
+    doubles a square (note - 24) with a 32-byte wave at the note, which the 64-step mode puts in
+    unison: the evidence for both.
   - `C30` (8 bytes, e.g. `00000000ff4400`) appears in layer-like macros that start nothing else.
 - **HARDWARE CHECKS ANDY HAS BEEN ASKED FOR (2026-11-03):** Go! Go! Beckham's and Lady Sia's drum kits
   (transpose 0, so they play about two octaves under their samples' own pitch: right or too deep?);
@@ -188,11 +194,11 @@ an assistant.
   songs send fits; outside the map plays the nearest entry and warns (W 0x20, never seen yet).
   - Two bugs fixed with it: PLAYMACRO into a keymap ran on from ip 0 and rejected the voice (the
     `R8` everywhere), and its offset was added to the pitch as Q8 minus 60 semitones.
-  - Entry byte 4 is pan (steps of 5 across piano-like maps); byte 6 is a flag. An entry with byte 6
-    set and transpose 0 plays at its SAMPLE'S ROOT (fixed): Lady Sia's, Beckham's and Ace's kits (a
-    sample per key, all transposes 0). Andy heard Lady Sia's drums as a low thump on hardware under
-    note + 0 (2026-11-05). Flag 1 WITH a transpose (BattleBots, Spider-Man) stays note + transpose,
-    which puts those hits near their roots; flag-0 kits (Rayman, Star Wars, Incredibles) unchanged.
+  - Entry byte 4 is pan (steps of 5 across piano-like maps); byte 6 is a flag, meaning unknown. A
+    "flag 1 + transpose 0 = the sample's own key" rule was tried (b487f7e) and WITHDRAWN the same day:
+    the "low thump" Andy heard in Lady Sia was a PSG part pinned low by the ADDNOTE bug, not drums,
+    and Ace's map shares one sample across keys (entries 2-5 = sample 50), which needs pitch tracking.
+    Keymaps are note + transpose throughout. Beckham's / Lady Sia's transpose-0 kits still want ears.
   - The mixes are loud now (Rayman, Incredibles, Ace peak at full scale) but clip on at most 0.03 %
     of samples.
   - **The sample root key is a byte at +10** (fixed 2026-11-03): +11 is something else (1 on Harry

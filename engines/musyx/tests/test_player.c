@@ -48,8 +48,9 @@ static void preview(void){
 }
 static void macros(void){
     fixture();memset(data+0x164,0,0x1C);
-    // SETNOTE absolute 72, STARTSAMPLE, SCALEVOLUME x0.5, WAIT forever.
-    data[0x164]=9;data[0x165]=1;w16(0x166,72*256);
+    // SETNOTE absolute 72 (op 8: flags, detune, key; op 9 is the relative ADDNOTE, as the carts' data
+    // shows, 2026-11-05), STARTSAMPLE, SCALEVOLUME x0.5, WAIT forever.
+    data[0x164]=8;data[0x165]=0;data[0x166]=0;data[0x167]=72;
     data[0x168]=15;w16(0x16A,1);
     data[0x170]=47;data[0x171]=1;w16(0x174,128);
     data[0x176]=4;w16(0x178,65535);

@@ -34,7 +34,8 @@ extern "C" {
 #define MS_PSG 4
 typedef struct {
     int32_t pitch;        // Q8 semitones (MIDI key x 256), mods included
-    uint32_t wave;        // wave channel: the 16 bytes (32 4-bit steps) to load, a bus address
+    uint32_t wave;        // wave channel: the waveform to load (a bus address), wave_len bytes
+    uint8_t wave_len;     // 16 (32 4-bit steps, one bank) or 32 (64 steps, both banks)
     uint8_t on,trigger;   // trigger: restart the channel (a new note, or a volume / envelope change)
     uint8_t duty,env,noise,volume; // duty 0..3; env NRx2 low nibble (0 = none); noise NR43 or 255 (by pitch); volume 0..127
     uint8_t track;
@@ -61,7 +62,7 @@ typedef struct {
     int32_t pitch;uint16_t macro_id,root_note;
     int16_t key_add;   // PLAYMACRO key offsets so far: a keymap reached through them is indexed by note + key_add
     uint32_t loop_at,wave; // the counted loop (op 6) in progress; a wave sample's data
-    uint8_t hw,psg,duty,env,noise,loop_left; // header voice (255 any); PSG channel + 1 held; its settings
+    uint8_t hw,psg,duty,env,noise,loop_left,wave_len; // header voice (255 any); PSG channel + 1 held; its settings
     uint8_t owner,note,velocity,volume,active,released,has_sample,tail,chains;
 } MsVoice;
 typedef struct {

@@ -119,7 +119,7 @@ static void psg_sync(MsPlayer *p){
         if(!v||!v->active||v->psg!=ch+1u){s->on=0;continue;}
         s->on=1;s->track=v->owner;s->pitch=v->pitch+p->mods.pitch;
         s->volume=(v->owner<16&&(p->mods.mute&(1u<<v->owner)))?0:v->volume;
-        s->duty=v->duty;s->env=v->env;s->noise=v->noise;s->wave=v->wave;
+        s->duty=v->duty;s->env=v->env;s->noise=v->noise;s->wave=v->wave;s->wave_len=v->wave_len;
     }
 }
 void ms_stop(MsPlayer *p){for(unsigned i=0;i<MS_VOICES;++i)off(p,i);for(unsigned ch=0;ch<MS_PSG;++ch){p->psg[ch].on=0;p->psg_owner[ch]=0;}for(unsigned i=0;i<16;++i)p->tracks[i].gate=0;p->running=0;event(p,MS_EVENT_STOP,0);}
@@ -192,8 +192,11 @@ static int start_sample(MsPlayer *p,unsigned i,unsigned id,uint32_t start){
     if(id>=p->sample_count){reject(p,i,MS_WHY_SAMPLE,p->samples);return 0;}
     uint32_t a=relative(r,p->song.root,p->samples+id*4,16);
     // A waveform for the wave channel: started on voice 2, or flagged at +11 (Harry Potter CoS's 16- and
-    // 32-byte samples). Its first 16 bytes are the 32 4-bit steps the channel loops.
-    if(a&&(v->hw==2||b(r,a+11)==1)&&ok(r,a+16,16)){v->wave=a+16;psg_claim(p,i,2);return 1;}
+    // 32-byte samples). 16 bytes are 32 4-bit steps (one bank of wave RAM), 32 bytes are 64 steps (both
+    // banks): Lady Sia doubles a square's melody with a 32-byte wave written two octaves above it, which
+    // the 64-step mode (two octaves below the squares for one register value) puts in unison.
+    if(a&&(v->hw==2||b(r,a+11)==1)&&ok(r,a+16,16)){
+        v->wave=a+16;v->wave_len=(uint8_t)(w(r,a)>=32&&ok(r,a+16,32)?32:16);psg_claim(p,i,2);return 1;}
     if(!a||!sample_valid(r,a)){reject(p,i,MS_WHY_SAMPLE,a);return 0;}
     uint32_t size=w(r,a),data=a+16;int32_t loop=(int32_t)w(r,a+4);
     if(size>MS_MAX_SAMPLE){reject(p,i,MS_WHY_SAMPLE,a);return 0;}
@@ -223,10 +226,9 @@ static int macro_select(MsPlayer *p,unsigned i,unsigned id){
         // A keymap (see KEYMAPS above): entry note + key_add, played at note + transpose. The pan and
         // the other trailing bytes are ignored (bit 54 still says "approximate"). A note outside the
         // map plays its nearest entry (warned).
-        // An entry with byte 6 set and transpose 0 plays its sample at the sample's own key: Lady Sia's,
-        // Go! Go! Beckham's and Ace Lightning's kits are all such (a sample per key, nothing to transpose),
-        // and at note + 0 they sounded an octave or two low (Andy, on hardware, 2026-11-05). With a
-        // transpose (BattleBots, Spider-Man) byte 6 changes nothing: note + transpose is their pitch.
+        // Entry byte 4 is pan; byte 6 is a flag whose meaning is unknown. (Reading flag 1 + transpose 0 as
+        // "the sample's own key" was tried and withdrawn on 2026-11-05: its evidence turned out to be the
+        // ADDNOTE bug, and Ace Lightning's map shares one sample over several keys, which needs pitch.)
         if(!p->preview||!ok(r,a+4,2)){unsupported(p,i,54);off(p,i);return 0;}
         if(!unsupported(p,i,54))return 0;
         unsigned count=h(r,a+4);int k=(int)v->note+v->key_add;
@@ -234,10 +236,7 @@ static int macro_select(MsPlayer *p,unsigned i,unsigned id){
         if(k<0||k>=(int)count){k=k<0?0:(int)count-1;p->warnings|=MS_WARN_KEYMAP_RANGE;}
         uint32_t item=a+6+(uint32_t)k*8u;
         if(!ok(r,item,8)){reject(p,i,MS_WHY_MACRO,item);return 0;}
-        int t=(int16_t)h(r,item+2);unsigned sid=h(r,item);
-        uint32_t sa=sid<p->sample_count?relative(r,p->song.root,p->samples+sid*4,16):0;
-        v->pitch=(b(r,item+6)&&!t&&sa)?(int32_t)b(r,sa+10)*256:(int32_t)v->note*256+t;
-        v->ip=0;v->tail=1;return start_sample(p,i,sid,0);
+        v->pitch=(int32_t)v->note*256+(int16_t)h(r,item+2);v->ip=0;v->tail=1;return start_sample(p,i,h(r,item),0);
     }
     v->ip=a+4;return 1;
 }
@@ -291,7 +290,13 @@ static void macro_run(MsPlayer *p,unsigned i){
         case 4:
             if(b(r,from+1)&&!unsupported(p,i,op))return;
             v->wait=h(r,from+2);if(v->wait)return;break;
-        case 9:{unsigned flags=b(r,from+1);int note=(int16_t)h(r,from+2);v->pitch=(flags&1)?note:(int32_t)v->note*256+note;break;}
+        case 9:{                                                        // ADDNOTE: flag, detune (cents), semitones
+            // Flag 1 adds to the note that was played ("org. key" in Factor 5's manual), flag 0 to the
+            // pitch so far (Denki's sweeps repeat +1). Read as an absolute pitch before 2026-11-05, which
+            // put Lady Sia's SETNOTE[01 00 e8] (-24 from the note) at the bottom of the range.
+            unsigned flags=b(r,from+1);int detune=(int8_t)b(r,from+2),add=(int8_t)b(r,from+3);
+            int32_t base=(flags&1)?(int32_t)v->note*256:v->pitch;
+            v->pitch=clip(base+add*256+((detune*655)>>8),-32768,32767);break;}
         case 13:{uint32_t to=branch(from,(int32_t)w(r,from+2));    // GOTO, possibly into another macro
             if(p->macro_lo&&to>=p->macro_lo&&to<p->macro_hi&&(to<v->macro_begin||to>=v->macro_end)){v->macro_begin=p->macro_lo;v->macro_end=p->macro_hi;}
             v->ip=to;break;}
