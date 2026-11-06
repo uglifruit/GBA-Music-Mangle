@@ -208,6 +208,18 @@ an assistant.
   The New Droid Army 17, Harry Potter CoS 81 (almost all PSG, so silent); and GAX 2: Bruce Lee 2.35,
   Spider-Man: Mysterio's Menace 2.01b, Tony Hawk 3 2.11 (all named, none playable). Scans take
   about 0.1 s each on the PC.
+- **New dumps (2026-11-06): Muppets: On with the Show, Premier Manager 2003-04, James Pond: Codename
+  Robocod, Super Puzzle Fighter II Turbo.** None plays.
+  - **Puzzle Fighter** says "GBAModPlay (C) Logik State 2002". loveemu's lists put that driver in 46
+    games, including Premier Manager 2004-05 and 2005-06.
+  - **The other three** are blank in AGBinator, and no engine name is in them.
+  - **No Engine Software music bank** turned up on any dump: scratchpad esfind2.py, a port of
+    lunasorcery's gbafind.
+  - **Premier Manager was a false MusyX hit:** a structurally valid root with 200 songs, none of which
+    sends a note.
+    - MusyX discovery now keeps a root only if one of its first 8 songs plays a note within 2048 ticks:
+      `sends_notes()` in eng_musyx.c, a hookless dry run on `s_ms`.
+    - All eleven real MusyX carts still pass, including Harry Potter's Game Boy-only songs.
 - **Lemony Snicket's Krawall has no "Krawall" text**, only `$Id: player.c,v 1.4 2003/03/19 23:12:15
   seb Exp`. The sniff now takes `$Id: player.c,v ` when " seb " follows (`Sniff.needs`). Its 20
   modules are all 2003-format, sample-based (226-sample bank, unsigned, centred on 128).

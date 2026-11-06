@@ -305,6 +305,28 @@ IWRAM_CODE static unsigned mx_words(const EngRom *r, uint32_t begin, uint32_t en
     return found;
 }
 
+// A root whose songs send no notes is a lookalike, not music: Premier Manager 2003-04 has one (200
+// "songs", 25 macros, not a note in any of them), where every real cart's songs do, Game Boy parts
+// included. So a root is kept only if one of its first eight songs plays a note within 2048 ticks
+// (about 5 bars). The dry run borrows s_ms with no hooks (nothing sounds); ready() sets it up again.
+static int sends_notes(const EngRom *r, uint32_t root, unsigned songs)
+{
+    if (s_ready) { stop(); s_ready = 0; }
+    int got = 0;
+    for (unsigned i = 0; i < songs && i < 8 && !got; i++) {
+        MsSong s;
+        if (!ms_song_info(r, root, i, &s)) continue;
+        ms_init(&s_ms, *r, 0);
+        if (!ms_start(&s_ms, &s)) continue;
+        for (unsigned t = 0; t < 2048 && s_ms.running && !got; t++) {
+            ms_tick(&s_ms);
+            for (unsigned k = 0; k < MS_TRACKS; k++) if (s_ms.tracks[k].notes) got = 1;
+        }
+        ms_stop(&s_ms);
+    }
+    return got;
+}
+
 void mx_discover(uint32_t begin, uint32_t end)
 {
     EngRom r = eng_cart_rom();
@@ -313,7 +335,8 @@ void mx_discover(uint32_t begin, uint32_t end)
     for (unsigned i = 0; i < n; i++) {
         MsCatalogue c;
         MsSong s;
-        if (ms_catalogue(&r, roots[i], &c) && c.songs && ms_song_info(&r, roots[i], 0, &s))
+        if (ms_catalogue(&r, roots[i], &c) && c.songs && ms_song_info(&r, roots[i], 0, &s)
+            && sends_notes(&r, roots[i], c.songs))
             scan_add_table(ENG_ID_MUSYX, roots[i]);
     }
 }
