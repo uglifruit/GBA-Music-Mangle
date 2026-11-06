@@ -262,6 +262,16 @@ an assistant.
   version decides V2 / V3). modtest's 7th cart is mkengines.py's gax2.gba (207 checks). Andy judged
   scratch renders right by ear; Tony Hawk 3 clipped in the trial player (no half volume) but is at
   0.13 % at worst in ours.
+- **GAX 2 replayer read from Tang Tang (2026-11-06): docs/ENGINES.md "The replayer, read".**
+  - **New behaviour:** legato notes, tone porta, EDx, 7xy (high nibble first, V3 too), perf loops,
+    instrument vibrato, the stored-slope envelope, four wave slots with fine tune, the 8372 Hz base.
+  - **Wave modulation** is `GxTrack.mod_*`; eng_gax.c `window()` passes each move to the new
+    `mixer_window()`.
+  - **Level:** the driver's own (`GX2_VOL_SHIFT 0`, (channels + 8) / 16 per voice). It clips like the
+    GBA, up to 1.1 % on Tony Hawk 3 and Bruce Lee.
+  - **GAX 3** shares the effects and vibrato, and keeps its interpolated envelope and silence-first
+    instrument load.
+  - **Not heard on hardware yet.**
 
 ## Booting from a saved slot (patch v4, 2026-10-27)
 

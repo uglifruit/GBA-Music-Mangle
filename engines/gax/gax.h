@@ -37,6 +37,16 @@ typedef struct {
     int16_t transpose,step_slide,perf_slide,vol_slide,perf_vol_slide;
     uint8_t pattern_empty,active,gate,note,activity,released,volume,perf_volume,env_volume;
     uint8_t perf_speed,fixed,slot,has_wave,reverse;
+    // From the GAX 2.01a replayer (Tang Tang, 2026-11-06), and shinen-gax-python for GAX 3:
+    int32_t porta_target;            // tone portamento (3xx): the pitch it glides to, Q8
+    int16_t porta_rate,vib;          // its step a frame; the vibrato's pitch offset, Q8
+    uint8_t delay,delay_note,delay_ins; // note delay (EDx): frames left, the note and instrument held
+    uint8_t vib_wait,vib_phase,perf_loop; // vibrato wait and sine phase; the perf list's loop count
+    // GAX 2 wave modulation: the loop is a window of the wave's modulation size at mod_pos, moved by
+    // its step every speed frames between its loop start and end, the play position moving with it.
+    // mod_shift is the move not yet passed to the mixer (the caller applies it and zeroes it).
+    uint32_t mod_pos,mod_size,mod_step,mod_lo,mod_hi;int32_t mod_shift;
+    uint8_t mod_on,mod_wait,mod_speed;int8_t mod_dir;
 } GxTrack;
 typedef struct {
     GxRom rom;GxHooks hooks;GxMods mods;GxTrack tracks[GX_CHANNELS];

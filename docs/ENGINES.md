@@ -17,6 +17,56 @@ payload's half volume Tony Hawk 3 is the hottest cart (0.13 % of samples at full
 song, against 12 % in the trial player); GAX 2 stays at GAX 3's level. Still unread: the second
 envelope (+128) and the +36 word. GAX 1.99 carts are not covered.
 
+**The replayer, read (2026-11-06).** Tang Tang's GAX 2.01a code was disassembled. The routines are
+the row reader 0x08026B34, note 0x08026CF4, instrument load 0x08026D38, perf-list step 0x08026D8C,
+per frame 0x08026F54 / envelope 0x0802735C / vibrato 0x08027428 / modulation 0x08027468, and voice
+setup 0x08026FF4. The ARM mixer is 0x08027C58 (voices) and 0x08027A60 (output). gax.c now does what
+they do. shinen-gax-python (MIT) was checked for GAX 3 where they overlap:
+- **Notes:** a note without an instrument only sets the pitch (legato). An instrument restarts the
+  envelope, perf list, vibrato and step volume. In GAX 2 it does not stop the sounding wave: the perf
+  list's next wave trigger replaces it.
+- **Pattern effects:**
+  - 3xx is tone portamento over xx frames (the note's own pitch is not set);
+  - 7xy plays x frames on its row, then y (high nibble first; shinen-gax-python agrees);
+  - EDx delays the row's note by x frames;
+  - 4, 5, 6, 8, 9 and other Ex do nothing in the driver.
+- **Perf list:**
+  - 6 sets a loop count and 5 jumps until it runs out;
+  - the perf volume resets only on a row that triggers a wave;
+  - a perf speed of 0 never steps.
+- **Instrument vibrato** (+8 wait, +9 depth, +10 speed): a 64-step sine, (sine × depth) >> 8 in
+  1/32 semitones, every frame.
+- **Envelope:** the stored slope (+6 of each point) × frames since the previous point, >> 8.
+  - It holds at the sustain point's exact time, and jumps from loop end to loop start until released.
+  - A last point of 0 with no loop ending there silences the voice.
+  - (GAX 3 keeps the interpolation it had: shinen-gax-python ignores the slope.)
+- **Waves:**
+  - Each of four slots is a 28-byte block at +12 + slot × 28: {modulation flag, -, -, -, start,
+    loop start, loop end, modulation size, step, speed u16, fine tune s16}. The sample is +1 + slot.
+  - It loops when loop start < loop end, else plays to the sample's end.
+  - The fine tune is in 1/32 semitones. The pitch table puts note 48 at 8372 Hz (GAX 3: 8363).
+  - The byte after the modulation flag is never read: the "ping-pong" flag was a guess, now dropped.
+- **Wave modulation:** the loop is a window of the modulation size. Every speed frames it moves by
+  its step, bouncing between loop start and loop end, and the play position moves with it.
+  `mixer_window()` (payload/mixer.c) applies each move. The window does not move on a reversed
+  voice, or on one that CHAOS gave another sample.
+- **Level:**
+  - envelope × perf volume × step volume × song volume, where 255 is unity at each stage;
+  - each voice adds (sample × level) >> 8;
+  - the sum is × (channels + 8) / 16 (unity for one channel) and clipped to 8 bits.
+  - That is the payload mixer at shift 0, so GAX 2 plays at the driver's own level
+    (`GX2_VOL_SHIFT 0`). Loud songs clip as they do on the GBA: Tony Hawk 3 and Bruce Lee on
+    0.4-1.1 % of samples. The card's GAIN setting trims it.
+- **Not reproduced:** the driver's echo and output filter (0x08027B7C, 0x08027AB4) and its
+  nearest-sample mixing.
+- **Checks:**
+  - the U masks are now empty on Tang Tang, Tony Hawk 3, Bruce Lee and Spider-Man MM (they had shown
+    tone porta, modulation and ping-pong);
+  - fuzz finds 0 bad reads;
+  - MP2K WAVs are unchanged.
+- **Test changes:** mkengines.py's gax2.gba instrument now has perf speed 1. The GAX tests expect
+  7xy's high nibble first and use effect 4 as the unknown one.
+
 ### The study
 
 Studied on dumps of Tang Tang (2.01a), Spider-Man: Mysterio's Menace (2.01b), Tony Hawk's Pro Skater 3

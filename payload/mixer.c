@@ -66,6 +66,25 @@ void mixer_stop(int ch)
     g_mix[ch].active = 0;
 }
 
+void mixer_window(int ch, uint32_t loopStart, uint32_t end, int32_t shift)
+{
+    MixChan *m = &g_mix[ch];
+    if (end > MIX_MAX_SAMPLES || loopStart >= end) return;
+    uint16_t s = IRQ_SAVE();
+    if (m->active && m->loopQ != MIX_NOLOOP && !(m->flags & MIX_F_REVERSE)) {
+        m->loopQ = loopStart << 12;
+        m->endQ  = end << 12;
+        if (m->seen == m->gen) {                  // playing: the position moves with the window
+            int32_t pos = m->pos + shift * 4096;
+            m->pos = pos < 0 ? 0 : pos;
+        } else {                                  // not picked up yet: where it starts moves instead
+            int32_t pos = (int32_t)m->startQ + shift * 4096;
+            m->startQ = pos < 0 ? 0 : (uint32_t)pos;
+        }
+    }
+    IRQ_RESTORE(s);
+}
+
 // Ease a block's volume toward its target: half the remaining distance per block (~1 ms), so a
 // 60 Hz envelope step or a fresh note lands as a 3-4 ms ramp rather than a click.
 #define EASE(cur, tgt) ((cur) + (((int32_t)(tgt) - (cur) + 1) >> 1))

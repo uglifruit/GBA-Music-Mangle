@@ -23,7 +23,7 @@
 #include "../engines/gax/gax.h"
 
 #define GX_MAX_SONGS 128
-#define GX2_VOL_SHIFT 1               // GAX 2 mix level (tuned on real carts below)
+#define GX2_VOL_SHIFT 0               // GAX 2: the driver's own level (its mixer clips as ours does)
 
 static GxPlayer  s_gx;
 static EngMixCtx s_mix;
@@ -144,6 +144,17 @@ static unsigned speed_sum(void)
     return s ? s : 12;
 }
 
+// GAX 2 wave modulation: pass each moved loop window to the mixer (gax.c keeps it in the sample).
+static void window(void)
+{
+    for (unsigned c = 0; c < s_gx.channels && c < MIX_CHANNELS; ++c) {
+        GxTrack *t = &s_gx.tracks[c];
+        if (!t->mod_shift) continue;
+        if (t->mod_on && t->has_wave) mixer_window((int)c, t->voice.loop, t->voice.size, t->mod_shift);
+        t->mod_shift = 0;
+    }
+}
+
 static int tick(void)
 {
     // A row is 6 ticks; a row is speed frames: speed/6 frames a tick, speed_sum/12 on average.
@@ -152,6 +163,7 @@ static int tick(void)
         s_frameAcc -= 256;
         gx_frame(&s_gx);
         if (!s_gx.running) return 0;
+        window();
     }
     if (s_frameAcc >= 256) s_frameAcc = 0;
     return 0;
@@ -191,6 +203,18 @@ static uint32_t tempo_i(void)
     return last;
 }
 
+// U, when anything was skipped: pattern effects (bit n = effect n), performance effects, features
+// (1 ping-pong loop, 2 modulation, 4 vibrato), in hex. Only if it fits the CAL row's 40 bytes.
+static void unsupported_text(char *t, int a)
+{
+    uint32_t pe = s_gx.unsupported[0] & 0xFFFF, pf = s_gx.unsupported[1] & 0xFFFF, ft = s_gx.unsupported[2] & 7;
+    if ((pe | pf | ft) && a + 11 < 39) {
+        t[a++] = ' '; t[a++] = 'U';
+        a = eng_put_hex(t, a, pe, 4); a = eng_put_hex(t, a, pf, 4); a = eng_put_hex(t, a, ft, 1);
+    }
+    t[a] = 0;
+}
+
 static void diag(char *t, int a)
 {
     // S songs, OLD how many the first (stricter) scan would have kept, FX banks, then the check
@@ -200,7 +224,7 @@ static void diag(char *t, int a)
         t[a++] = ' '; t[a++] = 'V'; t[a++] = '2';
         t[a++] = ' '; t[a++] = 'S'; a = eng_put_hex(t, a, s_songCount, 2);
         t[a++] = ' '; t[a++] = 'E'; t[a++] = s_gx.error ? '1' : '0';
-        t[a] = 0;
+        unsupported_text(t, a);
         return;
     }
     unsigned top = 0;
@@ -214,7 +238,7 @@ static void diag(char *t, int a)
         a = eng_put_hex(t, a, s_stats.count[top], 3);
     }
     t[a++] = ' '; t[a++] = 'E'; t[a++] = s_gx.error ? '1' : '0';
-    t[a] = 0;
+    unsupported_text(t, a);
 }
 
 static int put(char *t, int a, const char *s) { while (*s) t[a++] = *s++; t[a] = 0; return a; }

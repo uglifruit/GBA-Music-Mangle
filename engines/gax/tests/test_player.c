@@ -50,8 +50,8 @@ static void playback(void){
 static void effects(void){
     fixture();const uint8_t pattern[]={0,49,1,15,2,0xFA,12,0,0x80,0xFA,7,0x32,0xFF,4};memcpy(rom+0x2000,pattern,sizeof(pattern));
     gx_frame(&player);assert(player.speed[0]==2&&player.row==0);gx_frame(&player);gx_frame(&player);assert(player.tracks[0].volume==0);
-    gx_frame(&player);gx_frame(&player);gx_frame(&player);gx_frame(&player);assert(player.speed[0]==2&&player.speed[1]==3);
-    fixture();rom[0x2001]=0xFA;rom[0x2002]=3;rom[0x2003]=4;gx_frame(&player);assert(unsupported==1&&(player.unsupported[0]&(1u<<3)));
+    gx_frame(&player);gx_frame(&player);gx_frame(&player);gx_frame(&player);assert(player.speed[0]==3&&player.speed[1]==2); // 7xy: x frames on its row, then y (GAX 2.01a, shinen-gax-python)
+    fixture();rom[0x2001]=0xFA;rom[0x2002]=4;rom[0x2003]=4;gx_frame(&player);assert(unsupported==1&&(player.unsupported[0]&(1u<<4)));
     fixture();rom[0x3605]=5;rom[0x3604]=0;for(int i=0;i<10;++i)gx_frame(&player);assert(player.tracks[0].perf_index==0&&player.running);
     fixture();rom[0x331A]=1;gx_frame(&player);assert(player.unsupported[2]&(1u<<(GX_FEATURE_MODULATION-64)));
     puts("PASS speed, alternating speed, volume zero, bounded performance jumps, unsupported diagnostics");

@@ -67,7 +67,7 @@ def gax2_block(rom, o):
     rom[i + 1] = 1                                        # sample 1
     put32(rom, i + 16, 0); put32(rom, i + 20, 0); put32(rom, i + 24, 256)   # start, loop, end
     put32(rom, i + 124, BASE + o + 0x3500); put32(rom, i + 128, BASE + o + 0x3500)
-    rom[i + 132] = 0; rom[i + 133] = 1; put32(rom, i + 136, BASE + o + 0x3600)
+    rom[i + 132] = 1; rom[i + 133] = 1; put32(rom, i + 136, BASE + o + 0x3600)   # perf speed 1 (0 never steps)
     rom[o + 0x3500] = 1; rom[o + 0x3501] = rom[o + 0x3502] = rom[o + 0x3503] = 255; rom[o + 0x3508] = 255
     rom[o + 0x3600] = 2; rom[o + 0x3602] = 1              # performance row: note 2 (no shift), slot 1
     put32(rom, o + 0x3100, 0); put32(rom, o + 0x3104, 0)  # sample 0 empty, as V2 carts have it

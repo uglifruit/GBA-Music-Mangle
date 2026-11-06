@@ -55,6 +55,9 @@ void mixer_init(void);
 void mixer_start(int ch, const int8_t *data, uint32_t size, uint32_t loopStart, uint32_t startAt,
                  uint32_t step, uint16_t volL, uint16_t volR, uint8_t flags);
 void mixer_stop(int ch);
+// Move a looping voice's loop to [loopStart, end) and its play position by shift samples (GAX 2's wave
+// modulation): the sound keeps playing. The caller keeps the window inside the sample it started.
+void mixer_window(int ch, uint32_t loopStart, uint32_t end, int32_t shift);
 static inline int mixer_done(int ch) { return g_mix[ch].doneGen == g_mix[ch].gen; }
 
 // Render AUDIO_BLOCK samples of each side. Called from the DMA2 interrupt only.
