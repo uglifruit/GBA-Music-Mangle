@@ -216,6 +216,12 @@ an assistant.
   255 is legal (krawerter writes num-1 for no points), a junk high byte in the sample map passes (and
   plays its low byte, krawall.c); sample pan/volume are not judged. A module valid in both formats
   is the modern one (listing both doubled every song). The restart order is no longer a gate.
+- **OPEN (Andy, 2026-11-06): some Lemony Snicket tunes have strange levels** (maybe envelopes). Our
+  krawall.c computes envelope levels its own way (by position in time) rather than Krawall's per-tick
+  node stepping and fadeout, and lacks portamento, vibrato, arpeggio, tremolo, retrigger, pattern
+  loop/delays and all volume-column effects. docs/TRACKERS.md proposes replacing it with a core built
+  from Krawall's own player logic, shared with an Engine Software front end (no ES cart on hand yet;
+  Premier Manager 2003-04 is the likely one). docs/MUSYX_DRIVER.md is the MusyX driver write-up.
 - **Krawall sub-songs:** 254 markers split a module's order list into songs (Krawall's songIndex /
   KRAP_MODE_SONG). `kr_module_songs()`; a song number is module x 64 + song; `KrSong.start_order`
   and `song_mode` (loop or stop at the next marker). A module's only song keeps the old behaviour.
