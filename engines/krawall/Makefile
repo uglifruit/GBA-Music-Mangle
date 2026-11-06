@@ -2,7 +2,7 @@ CC ?= cc
 ARM_CC ?= arm-none-eabi-gcc
 ARM_NM ?= arm-none-eabi-nm
 CFLAGS = -std=c11 -O2 -Wall -Wextra -Werror
-CORE = krawall.c discovery.c mangle_adapter.c pcm_mixer.c
+CORE = krawall.c kr_tables.c discovery.c mangle_adapter.c pcm_mixer.c
 .PHONY: all test arm clean
 all: build/krawplay
 build:
@@ -15,6 +15,7 @@ test: build/test_player
 	./build/test_player
 arm: | build
 	$(ARM_CC) $(CFLAGS) -mcpu=arm7tdmi -marm -ffreestanding -fno-builtin -c krawall.c -o build/krawall.o
+	$(ARM_CC) $(CFLAGS) -mcpu=arm7tdmi -marm -ffreestanding -fno-builtin -c kr_tables.c -o build/kr_tables.o
 	$(ARM_CC) $(CFLAGS) -mcpu=arm7tdmi -marm -ffreestanding -fno-builtin -c mangle_adapter.c -o build/mangle_adapter.o
 	$(ARM_CC) $(CFLAGS) -mcpu=arm7tdmi -marm -ffreestanding -fno-builtin -c pcm_mixer.c -o build/pcm_mixer.o
 	$(ARM_CC) $(CFLAGS) -mcpu=arm7tdmi -marm -ffreestanding -fno-builtin -c discovery.c -o build/discovery.o

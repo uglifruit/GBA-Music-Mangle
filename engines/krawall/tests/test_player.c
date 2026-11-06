@@ -54,8 +54,9 @@ static void effects(void) {
     memcpy(rom+0x2022,row,sizeof(row));kr_tick(&p);assert(p.speed==3&&p.tracks[0].volume==48);
     kr_tick(&p);kr_tick(&p);kr_tick(&p);uint32_t s=g_kr_mix[0].step;
     kr_tick(&p);assert(g_kr_mix[0].step>s);kr_tick(&p);kr_tick(&p);assert(p.tracks[0].volume==0);
-    fixture(0);uint8_t uns[]={0x80,19,7,0};memcpy(rom+0x2022,uns,4);kr_tick(&p);
-    assert(unsupported==1&&(p.unsupported[0]&(1u<<19)));
+    // ENV_SETPOS (47): converted by krawerter, but empty in Krawall's own effect table
+    fixture(0);uint8_t uns[]={0x80,47,7,0};memcpy(rom+0x2022,uns,4);kr_tick(&p);
+    assert(unsupported==1&&(p.unsupported[1]&(1u<<(47-32))));
     fixture(0);uint8_t jump[]={0x80,4,0,0};memcpy(rom+0x2022,jump,4);
     for(int i=0;i<7;++i)kr_tick(&p);
     assert(p.loops==1);
@@ -117,6 +118,35 @@ static void discovery(void){
     assert(kr_module_songs(&p.rom,BASE+0x1000,KR_MODERN,starts,ticks,4)==1&&starts[0]==0&&ticks[0]==48);
     puts("PASS incremental trial discovery of module/sample/instrument candidates");
 }
+// Krawall's own player logic (ported 2026-11-06): what the trial engine lacked or got wrong.
+static unsigned step_after(int ticks){for(int i=0;i<ticks;++i)kr_tick(&p);return g_kr_mix[0].step;}
+static void ported(void) {
+    // Gxx sets the song's volume (0..64) beside the module's global volume: G40 is full, not half.
+    fixture(0);kr_tick(&p);unsigned plain=g_kr_mix[0].volL;
+    fixture(0);uint8_t g[]={0xE0,49,1,0x50,32,0x40,0};memcpy(rom+0x2022,g,sizeof(g));kr_tick(&p);
+    assert(g_kr_mix[0].volL==plain&&plain);
+    fixture(0);uint8_t g2[]={0xE0,49,1,0x50,32,0x20,0};memcpy(rom+0x2022,g2,sizeof(g2));kr_tick(&p);
+    assert(g_kr_mix[0].volL*2>=plain-1&&g_kr_mix[0].volL*2<=plain+1);
+    // Dxx is decimal-coded: D10 breaks to row 10 (of a 32-row pattern; the one order wraps to itself).
+    fixture(0);w16(0x2020,32);uint8_t d[]={0xE0,49,1,0x50,5,0x10,0};memcpy(rom+0x2022,d,sizeof(d));
+    kr_tick(&p);assert(p.row==10&&p.order==0);
+    // Portamento: the period moves between rows (Amiga module: XM up is stored as down).
+    fixture(0);uint8_t pu[]={0xE0,49,1,0x50,10,0x08,0};memcpy(rom+0x2022,pu,sizeof(pu));
+    unsigned s0=step_after(1),s1=step_after(1),s2=step_after(1);assert(s0<s1&&s1<s2);
+    // Vibrato: the step swings and comes back.
+    fixture(0);uint8_t vb[]={0xE0,49,1,0x50,20,0x8F,0};memcpy(rom+0x2022,vb,sizeof(vb));
+    unsigned base=step_after(1),hi=0,lo=0xFFFFFFFF;for(int i=0;i<5;++i){unsigned x=step_after(1);if(x>hi)hi=x;if(x<lo)lo=x;}
+    assert(lo<base&&hi>=base);   // (Amiga periods: the sine first raises the period, lowering the pitch)
+    // Tone portamento: a new note with 3xx glides from the old pitch toward it.
+    fixture(0);uint8_t tp[]={0xE0,49,1,0x50,0,0,0, 0xA0,61,1,19,0x20,0};memcpy(rom+0x2022,tp,sizeof(tp));
+    unsigned from=step_after(1);unsigned at=step_after(6),later=step_after(2);
+    assert(at>=from&&later>at&&later<from*2);
+    // Volume column: $62 slides the volume down 2 a tick between rows.
+    fixture(0);uint8_t vc[]={0xE0,49,1,0x62,0,0,0};memcpy(rom+0x2022,vc,sizeof(vc));
+    kr_tick(&p);int v0=p.tracks[0].volume;kr_tick(&p);kr_tick(&p);assert(p.tracks[0].volume==v0-4);
+    assert(!unsupported);
+    puts("PASS Gxx beside the global volume, BCD breaks, portamento, vibrato, tone porta, volume column");
+}
 static uint32_t seed=12345;
 static uint32_t rnd(void){seed^=seed<<13;seed^=seed>>17;seed^=seed<<5;return seed;}
 static void fuzz(void){
@@ -129,4 +159,4 @@ static void fuzz(void){
     }
     puts("PASS 2,000 randomized pattern/control cases");
 }
-int main(void){playback();effects();safety();instruments();unsigned_and_bridge();discovery();fuzz();return 0;}
+int main(void){playback();effects();ported();safety();instruments();unsigned_and_bridge();discovery();fuzz();return 0;}

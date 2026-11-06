@@ -8,6 +8,8 @@
 // converter writes one global bank of each, so the largest of each is taken; the CAL page steps
 // through the rest, and the choice is the patch's (krSampleBank / krInstrBank, 0 = the largest).
 //
+// The player is Krawall's own player logic, ported (engines/krawall/krawall.c, LGPL-2.1).
+//
 // Its seek silences the voices, so RESTART BAR returns to the section's order and row (and tick)
 // with the notes cut at the jump.
 //
@@ -54,7 +56,7 @@ static void ready(void)
     EngHooks h;
     s_mix.rom = &s_kr.rom;
     s_mix.flags = MIX_F_UNSIGNED;      // Krawall samples are offset-binary
-    s_mix.volShift = 1;                // half volume, as its trial ran
+    s_mix.volShift = 0;                // krawall.c gives Krawall's own channel levels
     eng_mixer_hooks(&h, &s_mix);
     kr_init(&s_kr, eng_cart_rom(), &h);
     s_ready = 1;

@@ -332,4 +332,9 @@ rules).
 
 ## Licence
 
-MIT, see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE), except the Krawall player: `engines/krawall/krawall.c` and
+`engines/krawall/kr_tables.c`/`.h` are ported from Sebastian Kienzl's Krawall
+([github.com/sebknzl/krawall](https://github.com/sebknzl/krawall)) and stay under the GNU Lesser General
+Public License 2.1, see [engines/krawall/COPYING.LGPL](engines/krawall/COPYING.LGPL). The firmware and
+payload may be shared freely; whoever hands on a built UF2 must also offer the source of those files
+(this repository does), so anyone can rebuild it with their own changes.

@@ -71,6 +71,13 @@ Dumps of four of Andy's carts settled what the hardware reports could not:
   20 modules then play. Discovery was also brought in line with UnkrawerterGBA (banks judged on
   their first four pointers; envelope counts of 255, junk sample-map bytes and wide pans accepted),
   a module is read in one format only, and the songs inside a module (split by 254) are listed.
+- **Krawall now runs Krawall's own player logic (2026-11-06).** `engines/krawall/krawall.c` is a port
+  of Sebastian Kienzl's lib/player.c and player_effects.h (LGPL-2.1, kept in its own files with
+  `COPYING.LGPL`) over bounds-checked reads and our mixer: every effect including the volume column,
+  Krawall's period tables, envelope stepping, fadeout and auto-vibrato, its levels (volShift 0), and
+  its quirks. It fixed the trial engine's Gxx (it overwrote the global volume), decimal Dxx breaks,
+  and volume resets on notes without an instrument. Lemony Snicket and Narnia now report no
+  unsupported effects. docs/TRACKERS.md has the reasoning and the plan for Engine Software.
 - **GAX (Tang Tang): GAX Sound Engine v2.01a**, which this player cannot read; the result screen now
   says so.
 - **The scan:** each pass checks a word with two or three aligned loads in IWRAM and runs its full

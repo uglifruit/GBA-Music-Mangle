@@ -152,7 +152,8 @@ The places below are in Krawall's `player.c`, which a shared core keeps:
 
 ## 6. Recommendation
 
-1. **Build one tracker core from Krawall's player logic**, outputting through `eng_mixer` as the other
+1. **DONE 2026-11-06 for Krawall** (`engines/krawall/krawall.c`; the Engine Software front end is still
+   to come). **Build one tracker core from Krawall's player logic**, outputting through `eng_mixer` as the other
    engines do, and replace `engines/krawall/krawall.c` with it plus a Krawall front end (the RLE
    decoder, Module/Instrument/Sample readers for the 2003 and 2005 layouts, and our existing discovery).
    This fixes Krawall's missing effects and period handling, and is the place to check Lemony Snicket's

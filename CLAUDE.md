@@ -216,12 +216,33 @@ an assistant.
   255 is legal (krawerter writes num-1 for no points), a junk high byte in the sample map passes (and
   plays its low byte, krawall.c); sample pan/volume are not judged. A module valid in both formats
   is the modern one (listing both doubled every song). The restart order is no longer a gate.
-- **OPEN (Andy, 2026-11-06): some Lemony Snicket tunes have strange levels** (maybe envelopes). Our
-  krawall.c computes envelope levels its own way (by position in time) rather than Krawall's per-tick
-  node stepping and fadeout, and lacks portamento, vibrato, arpeggio, tremolo, retrigger, pattern
-  loop/delays and all volume-column effects. docs/TRACKERS.md proposes replacing it with a core built
-  from Krawall's own player logic, shared with an Engine Software front end (no ES cart on hand yet;
-  Premier Manager 2003-04 is the likely one). docs/MUSYX_DRIVER.md is the MusyX driver write-up.
+- **Krawall is now Krawall's own player logic, ported (2026-11-06; Andy agreed, as long as it can be
+  shared freely).** `engines/krawall/krawall.c` is lib/player.c + player_effects.h re-expressed over
+  bounds-checked reads, with Krawall's tables copied into `kr_tables.c`; both stay LGPL-2.1
+  (`engines/krawall/COPYING.LGPL`, notices in the files, README's Licence section: whoever hands on a
+  UF2 must offer the source, so the repo must be public, or the source supplied, when it is shared).
+  The rest of the project stays MIT. What changed in playback:
+  - every Krawall effect now plays (the trial engine had no portamento, vibrato, tremolo, arpeggio
+    between rows, tremor, retrigger, pattern loop, note delay, panbrello or any volume-column effect),
+    with Krawall's period tables (linear/Amiga by the module's flag) and its envelope stepping,
+    fadeout and auto-vibrato;
+  - Gxx is the song's volume beside the module's global volume (the trial overwrote the global
+    volume: G40 played at half); Dxx breaks are decimal-coded (D10 went to row 16); a note without an
+    instrument keeps its volume (the trial reset it to the sample's default);
+  - Krawall's quirks are kept (the songs were tracked against them): the E6x loop resumes in the NEXT
+    pattern, the volume-column tone porta reads the effect's operand, pattern delay (EEx) and
+    envelope position (Lxx) do nothing, auto-vibrato has no sweep or type.
+  - Levels are Krawall's: lvol = vol x master x (64 -/+ pan) >> 13 with master = 128 x module global
+    x Gxx >> 13, which at its default output setting (32 channels, master 128) is our mixer at volume
+    lvol: eng_krawall's volShift is 0 now (it was 1 with the trial's own formula; loudness unchanged).
+    The game's actual kramSetMasterVol setting is not known (no way found to read it from the cart).
+  - Every Lemony Snicket and Narnia song plays with 0 unsupported effects (most had several), 0 bad
+    reads; short-term loudness moves under 2.3 dB on Lemony (Andy's "strange levels" report,
+    2026-11-06: re-listen) and up to 8.6 dB at moments on two Narnia songs. A loop is counted when the
+    row it lands on plays. Payload 140.5 KB (+11.4 KB: the effects and the 3 KB linear table).
+  - docs/TRACKERS.md is the plan this follows; an Engine Software front end can share the core once
+    there is a dump (Premier Manager 2003-04 is the likely cart). docs/MUSYX_DRIVER.md is the MusyX
+    driver write-up.
 - **Krawall sub-songs:** 254 markers split a module's order list into songs (Krawall's songIndex /
   KRAP_MODE_SONG). `kr_module_songs()`; a song number is module x 64 + song; `KrSong.start_order`
   and `song_mode` (loop or stop at the next marker). A module's only song keeps the old behaviour.
@@ -406,7 +427,7 @@ an assistant.
 
 ## Payload facts
 
-- 117.5 KB with all four engines, about 17.9 s to upload (65.9 KB / 10 s with MP2K alone). IWRAM holds about 11 KB: the DMA handlers, the dispatcher,
+- 140.5 KB with all four engines (2026-11-06), about 21.4 s to upload (65.9 KB / 10 s with MP2K alone). IWRAM holds about 11 KB: the DMA handlers, the dispatcher,
   `mixer_render`, the scan loop, the drawing primitives, `mod_update`, `clock_service`,
   `player_update`, the rings, the echo line and the accumulators.
 - **Drawing speed (2026-10-27, FM's `SPEEDUPSCREEN.md`):** `rect`/`line`/`glyph`/`text` are FM's
