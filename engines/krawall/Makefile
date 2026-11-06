@@ -20,7 +20,7 @@ arm: | build
 	$(ARM_CC) $(CFLAGS) -mcpu=arm7tdmi -marm -ffreestanding -fno-builtin -c pcm_mixer.c -o build/pcm_mixer.o
 	$(ARM_CC) $(CFLAGS) -mcpu=arm7tdmi -marm -ffreestanding -fno-builtin -c discovery.c -o build/discovery.o
 	$(ARM_CC) $(CFLAGS) -mcpu=arm7tdmi -marm -ffreestanding -fno-builtin -c integration_example.c -o build/integration_example.o
-	$(ARM_CC) -nostdlib -r build/krawall.o build/mangle_adapter.o build/pcm_mixer.o build/discovery.o build/integration_example.o -o build/krawall_poc.o
+	$(ARM_CC) -nostdlib -r build/krawall.o build/kr_tables.o build/mangle_adapter.o build/pcm_mixer.o build/discovery.o build/integration_example.o -o build/krawall_poc.o
 	$(ARM_NM) -u build/krawall_poc.o
 	test -z "$$($(ARM_NM) -u build/krawall_poc.o)"
 clean:
