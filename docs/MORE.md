@@ -27,7 +27,7 @@ on its own.
 | GAX | Shin'en's engine: Finding Nemo, Tang Tang, Tony Hawk's Pro Skater 3, Spider-Man: Mysterio's Menace, Bruce Lee |
 | Krawall | Lemony Snicket, The Chronicles of Narnia, many European games |
 | MusyX | Factor 5's: Lady Sia, Denki Blocks!, BattleBots, Go! Go! Beckham!, The Incredibles, Harry Potter |
-| GBAModPlay | Logik State's: Super Puzzle Fighter II Turbo (and Need for Speed, Driv3r, Medal of Honor: Infiltrator, Lego Bionicle ...) |
+| GBAModPlay | Logik State's: Super Puzzle Fighter II Turbo, Driv3r (and Need for Speed, Medal of Honor: Infiltrator, Lego Bionicle ...) |
 
 ### "No music found that it can play"
 
@@ -141,7 +141,7 @@ tools/pcplay/build/pcplay test.gba --song 0 --secs 10 --out song.wav
 tools/pcplay/build/pcplay test.gba --fuzz 6          # every song, random mangles, bounds-checked
 python -I engines/musyx/tests/make_demo.py msdemo.gba  # a small authored MusyX cart
 python -I tools/pcplay/mkengines.py eng test.gba     # synthetic GAX, Krawall, GBAModPlay, MP2K + GAX carts
-tools/pcplay/build/modtest test.gba msdemo.gba eng/gax.gba eng/krawall.gba eng/mixed.gba eng/krawall2.gba eng/gax2.gba eng/lsplay.gba
+tools/pcplay/build/modtest test.gba msdemo.gba eng/gax.gba eng/krawall.gba eng/mixed.gba eng/krawall2.gba eng/gax2.gba eng/lsplay.gba eng/lsplay2.gba
 tools/pcplay/build/pcplay yourgame.gba --full --songs   # every engine, as RESCAN FULL
 ```
 `pcplay` renders a song with the payload's own engine, the Game Boy channels through a simple

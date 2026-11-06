@@ -6,7 +6,8 @@
 //
 // THE BANK. A module plays instruments from a sample bank the game hands the driver; nothing in the
 // module points at it. Discovery takes a bank that holds every instrument the modules play: first
-// right after a module (where Puzzle Fighter's converter put it), else anywhere near them.
+// right after a module (where Puzzle Fighter's and Driv3r's converters put it), else near them.
+// The two driver versions (2002, 2003) lay modules and banks out differently: lsplay.c.
 //
 // Every module is a song. Its seek silences the voices, so RESTART BAR returns to the section's
 // order and row with the notes cut at the jump.
@@ -192,37 +193,29 @@ void lsp_discover(uint32_t begin, uint32_t end)
     ls_words(&r, begin, end);
 }
 
-// Where a module's data ends (its last pattern's last byte + 1).
-static uint32_t module_end(const EngRom *r, uint32_t m)
-{
-    (void)r;
-    uint32_t np = rom_u32(m + 0x1B1C), a = m + 0x2034;
-    for (uint32_t i = 0; i < np; i++) a += rom_u32(m + 0x1C30 + 4 * i);
-    return a;
-}
-
 void lsp_discover_finish(void)
 {
     if (!s_modCount) return;
     EngRom r = eng_cart_rom();
+    int v = ls_module_valid(&r, s_mods[0]);              // a cart's modules share one version
     uint32_t used[4] = { 0, 0, 0, 0 }, u[4];
     for (unsigned i = 0; i < s_modCount; i++)
         if (ls_module_instruments(&r, s_mods[i], u)) for (int k = 0; k < 4; k++) used[k] |= u[k];
     // Right after a module first (word-aligned), then every word within 1 MB of the modules.
     uint32_t lo = s_mods[0], hi = 0;
     for (unsigned i = 0; i < s_modCount && !s_bank; i++) {
-        uint32_t e = (module_end(&r, s_mods[i]) + 3) & ~3u;
+        uint32_t e = (ls_module_end(&r, s_mods[i]) + 3) & ~3u;
         if (e > hi) hi = e;
-        unsigned n = ls_bank_valid(&r, e, used);
+        unsigned n = ls_bank_valid(&r, e, used, v);
         if (n) { s_bank = e; s_bankSounds = n; }
     }
     if (!s_bank) {
         uint32_t from = lo - r.base > 0x100000 ? lo - 0x100000 : r.base;
-        uint32_t to = hi + 0x100000 < r.base + r.size - LS_BANK_SIZE ? hi + 0x100000 : r.base + r.size - LS_BANK_SIZE;
+        uint32_t to = hi + 0x100000 < r.base + r.size - 0x1000 ? hi + 0x100000 : r.base + r.size - 0x1000;
         for (uint32_t a = from; a < to && !s_bank; a += 4) {
-            uint32_t e0 = rom_u16(a), v0 = rom_u16(a + 4);
-            if (!e0 || v0 > 64 || rom_u16(a + 6) + rom_u16(a + 8) > e0) continue;
-            unsigned n = ls_bank_valid(&r, a, used);
+            uint32_t e0 = v == 2 ? rom_u32(a) : rom_u16(a), f = v == 2 ? a + 2 : a;   // its first instrument
+            if (!e0 || e0 > 0xFFFF || rom_u16(f + 4) > 64 || rom_u16(f + 6) + rom_u16(f + 8) > e0) continue;
+            unsigned n = ls_bank_valid(&r, a, used, v);
             if (n) { s_bank = a; s_bankSounds = n; }
         }
     }

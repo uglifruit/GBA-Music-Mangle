@@ -38,6 +38,7 @@ static const Sniff kSniff[] = {                     // in order of preference fo
     { "$Id: player.c,v ",  16, ENG_KRAWALL, " seb " },
     { "Extended Module: ", 17, ENG_XM,      0 },
     { "GBAModPlay",        10, ENG_LOGIK,   0 },
+    { "LS_Play (C)",       11, ENG_LOGIK,   0 },
     { "GBAMOD30",           8, ENG_LOGIK,   0 },
 };
 #define SNIFF_RUN 80                                // how far a `needs` is looked for

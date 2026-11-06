@@ -52,6 +52,7 @@ SNIFF = [
     (b'$Id: player.c,v ', 'KRAWALL', b' seb '),
     (b'Extended Module: ', 'XM', None),
     (b'GBAModPlay', 'GBAMODPLAY', None),
+    (b'LS_Play (C)', 'GBAMODPLAY', None),
     (b'GBAMOD30', 'GBAMODPLAY', None),
 ]
 SNIFF_RUN = 80

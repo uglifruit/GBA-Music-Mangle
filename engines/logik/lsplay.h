@@ -3,9 +3,10 @@
 // docs/ENGINES.md "GBAModPlay"); no cartridge code is executed.
 //
 // THE DATA. A module ("GBAMOD30") holds the song: channels, order list, patterns, speed and BPM. Its
-// samples are in a separate BANK the game hands the driver: 256 instruments of 12 bytes {length,
-// finetune, volume, loop start, loop length, relative note}, then every sample's bytes back to back
-// (signed 8-bit). A pattern is one block per channel, each three run-length streams of {rows, value}:
+// samples are in a separate BANK the game hands the driver: 256 instruments {length, finetune,
+// volume, loop start, loop length, relative note}, then every sample's bytes back to back (signed
+// 8-bit). Two versions share the magic with different layouts (see lsplay.c): 2002's (Puzzle Fighter)
+// and 2003's (Driv3r, "LS_Play"). A pattern is one block per channel, each three run-length streams of {rows, value}:
 // note and instrument (u16, big-endian: note = v >> 7, 0x1FF none; instrument = v & 127, 0 none), the
 // volume column (u8, 0 none, else volume + 1) and the effect (u16 big-endian: effect, parameter).
 #ifndef LS_PLAYER_H
@@ -42,6 +43,7 @@ typedef struct {
     uint32_t notes;
     int32_t lin;                    // linear mode's portamento offset (period units, 64 a semitone)
     int16_t amiga, vib;             // Amiga mode's portamento and vibrato offsets (period units)
+    int32_t vib_lin;                // version 2's linear vibrato offset (period units)
     int16_t fine, rel;              // the instrument's finetune and relative note
     int16_t vol;                    // 0..64 (C can set more)
     uint16_t note, ins;             // the note playing; the instrument (0-based)
@@ -57,17 +59,20 @@ typedef struct {
     LsRom rom; LsHooks hooks; LsMods mods; LsTrack tracks[LS_CHANNELS];
     uint32_t module, bank, patterns, loops, rng, unsupported, frames;
     uint16_t channels, orders, pattern_count, rows, order, row, speed, bpm, tick, counter;
-    uint16_t music_volume;          // the game's music volume (Puzzle Fighter: 90, its default)
+    uint16_t music_volume;          // the game's music volume (Puzzle Fighter: 90, its default; Driv3r 64)
+    uint8_t version;                // the module layout and driver: 1 (2002) or 2 (2003), see lsplay.c
     uint16_t seek_order, seek_row;  // a jump into a pattern (break, loop), taken after the row's cells
-    uint8_t linear, running, repeat, error, broke, seek;
+    uint16_t pattern_notes;         // notes this pattern so far: a silent one jumping to itself is the end
+    uint8_t linear, running, repeat, error, broke, seek, ended;
 } LsPlayer;
 
 void ls_init(LsPlayer *, LsRom, const LsHooks *);
-int ls_module_valid(const LsRom *, uint32_t module);
+int ls_module_valid(const LsRom *, uint32_t module);   // 0, or its version: 1 (2002) or 2 (2003)
+uint32_t ls_module_end(const LsRom *, uint32_t module); // its last pattern's last byte + 1
 // A bank at a: every instrument it has fits the rules, and the samples fit the cart. used: a mask of
 // instruments (1-based, 128 bits) that must all be present; 0 skips that test. Returns the number of
 // instruments with a sample, 0 if it is not a bank.
-unsigned ls_bank_valid(const LsRom *, uint32_t a, const uint32_t *used);
+unsigned ls_bank_valid(const LsRom *, uint32_t a, const uint32_t *used, int version);
 // The instruments a module plays (bit n of the 128-bit mask = instrument n). 0 if it cannot be read.
 int ls_module_instruments(const LsRom *, uint32_t module, uint32_t used[4]);
 // Its length in ticks to its end or its loop (*loops: a position jump backwards).

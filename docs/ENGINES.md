@@ -67,10 +67,46 @@ is playing. "As built" below records where the build differs from the design.
   - every other dump scans as before, and MP2K WAVs are byte-identical.
   - Payload 159.6 KB (+15 KB).
   - **Not heard on hardware or by ear yet.**
-- **Not supported:**
-  - the effect bank (bank 2, 4-bit ADPCM, at 0x08132C00 in Puzzle Fighter);
-  - other GBAMOD versions (only "GBAMOD30" is accepted). The 2004-06 games are driver 4.0 and may
-    differ.
+- **Not supported:** the effect bank (bank 2, 4-bit ADPCM, at 0x08132C00 in Puzzle Fighter).
+
+### Version 2: the 2003 driver (Driv3r; added 2026-11-06)
+
+Driv3r's credit is "LS_Play (C) Logik State 2003" (now in the sniff). Its modules keep the
+"GBAMOD30" magic, but the layout is new. `ls_module_valid` returns the version: 1 if +0x38 is an
+order count, else 2.
+
+- **Driv3r routines:**
+  - module set-up 0x087D9310, bank set-up 0x087D93D0, init 0x087D9484;
+  - row reader 0x087D9998, cell processor 0x087DAB18 (row table 0x087DAD2C);
+  - tick effects 0x087DA800 area (kind table 0x087DA868);
+  - linear pitch 0x087D89AC, frequency 0x087D8968, ARM mixer 0x087E4278 (unchanged).
+  - The game calls the driver through ARM veneers at 0x087E4934..0x087E49DC. Init gets a config
+    block at 0x0877A104 {..., bank 0x087AEA94, ...}, and "play song n" reads 10 module pointers at
+    0x0877A0D0.
+- **Module:**
+  - +0x28 channels (the driver plays 8 at most); +0x34 orders; +0x38 a 256-byte identity table (unused);
+  - +0x13C rows; +0x140 Amiga; +0x144 BPM; +0x148 speed;
+  - +0x14C the order list (256); +0x24C each pattern's offset (u32) from +0x650, where the patterns are.
+  - There is no pattern count (the order list's largest entry + 1) and no pattern size.
+  - Patterns and the streams are as in version 1.
+- **Bank:** 256 × 16 bytes {length u32, finetune, volume, loop start, loop length, relative note
+  u32 (signed: Driv3r has -6)}, the samples from +0x1000. It follows the last module, as in version 1.
+- **Changed in the driver, and followed:**
+  - tick effects on every channel (version 1: four);
+  - vibrato works in linear mode: (half-sine[pos >> 2] × depth) >> 5, negative for pos > 31,
+    pos += (speed + 4) >> 1. It is a pitch offset that only a new note clears.
+  - 4xy sets speed and depth separately and restarts the sine; a row with 4 keeps the vibrato going;
+  - the sample's end is no longer length - 1;
+  - all three volume stages are 64 (Driv3r's init), so a voice's level is its volume.
+- **Songs end on a silent pattern that jumps to itself** (Bxx to its own order, no notes): Driv3r's
+  converter ends every non-looping song that way.
+  - lsplay treats it as the song's end: it stops, or restarts under SONG END = REPEAT.
+  - The song is classified by the length before it, so it isn't counted as a loop every few rows.
+- **Driv3r:** 10 modules (1-6 channels, 102-162 BPM, speed 6-9, effects A and D), 16 sounds;
+  6 music, 3 jingles, 1 effect. Fuzz finds 0 bad reads; Puzzle Fighter's renders are unchanged.
+  modtest's 9th cart is mkengines.py's lsplay2.gba (244 checks).
+- **Not seen yet:** the 2004-06 games (driver 4.0 by Logik State's own page); they may need a
+  third layout.
 
 ## GAX 2 (feasibility 2026-11-03, implemented 2026-11-05)
 

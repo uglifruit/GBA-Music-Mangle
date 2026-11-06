@@ -116,8 +116,8 @@ void scan_forget(void);
 //   KRAWALL  Sebastian Kienzl's XM/S3M player. Retail builds carry a CVS "$Id: Krawall ..." line
 //            (TCRF; some are stripped), the open-sourced library "$Krawall v1.0.0" (lib/general.c).
 //   XM       a whole FastTracker 2 module stored as-is: "Extended Module: " and its 20-byte name.
-//   GBAMODPLAY  Logik State's driver: "GBAModPlay (C) Logik State 2002" (Super Puzzle Fighter II), and
-//            its modules' magic "GBAMOD30" (the driver checks it before playing one).
+//   GBAMODPLAY  Logik State's driver: "GBAModPlay (C) Logik State 2002" (Super Puzzle Fighter II),
+//            "LS_Play (C) Logik State 2003" (Driv3r), and its modules' magic "GBAMOD30".
 // Engines that leave no text (Apex Audio System, checked in its source; most in-house engines)
 // cannot be named this way.
 #define ENG_GAX     (1u << 0)

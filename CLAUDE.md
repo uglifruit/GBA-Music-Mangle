@@ -233,8 +233,12 @@ an assistant.
   - **Discovery:** modules by their magic; the sample bank by its structure, checked against every
     instrument the modules use (none of the modules points at it).
   - **Clock:** one driver tick per 24-PPQN tick.
-  - **Tests:** modtest's 8th cart is `eng/lsplay.gba` (226 checks).
+  - **Tests:** modtest's 8th cart is `eng/lsplay.gba`, its 9th `eng/lsplay2.gba` (244 checks).
   - **Not heard yet.** Puzzle Fighter lists 19 songs on MUSIC.
+  - **Two versions share the "GBAMOD30" magic:** 2002 (Puzzle Fighter) and 2003 (Driv3r, "LS_Play"),
+    with different module and bank layouts and some driver changes; `LsPlayer.version`. See
+    docs/ENGINES.md "Version 2".
+  - **A silent pattern jumping to itself is a song's end** (Driv3r), not a loop.
 - **Lemony Snicket's Krawall has no "Krawall" text**, only `$Id: player.c,v 1.4 2003/03/19 23:12:15
   seb Exp`. The sniff now takes `$Id: player.c,v ` when " seb " follows (`Sniff.needs`). Its 20
   modules are all 2003-format, sample-based (226-sample bank, unsigned, centred on 128).

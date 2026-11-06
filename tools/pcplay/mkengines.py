@@ -8,6 +8,7 @@
                refused: an instrument with no envelope points (count stored as 255), a sample-map
                entry with a junk high byte, a sample panned past +-64
   lsplay.gba   a GBAModPlay module (GBAMOD30), its sample bank after it, and the driver's credit
+  lsplay2.gba  the 2003 layout (Driv3r's): a looping module, one that ends, the 16-byte-entry bank
   gax2.gba     a GAX 2 song: a song entry of four handlers (dummy, header, the channel's pattern
                table, dummy), the V2 header, a V2 instrument (one wave, envelope at +124, performance
                rows at +136), an empty sample 0 and a SIGNED sample, and "GAX Sound Engine v2.01a"
@@ -134,6 +135,38 @@ def lsplay_block(rom, o):
     rom[o + 0x8001:o + 0x8001 + len(text)] = text
 
 
+def lsplay2_module(rom, m, orders, pats):
+    """A 2003-layout GBAMOD30 module at m (Driv3r's): orders are pattern numbers, pats channel cell lists."""
+    rom[m:m + 8] = b'GBAMOD30'
+    put32(rom, m + 0x28, len(pats[0])); put32(rom, m + 0x34, len(orders))
+    for k in range(256): rom[m + 0x38 + k] = k & 255         # Driv3r's identity table (unused here)
+    put32(rom, m + 0x13C, 16); put32(rom, m + 0x140, 0); put32(rom, m + 0x144, 125); put32(rom, m + 0x148, 6)
+    for k, o in enumerate(orders): rom[m + 0x14C + k] = o
+    a, off = m + 0x650, 0
+    for i, chans in enumerate(pats):
+        pdata = b''.join(ls_streams(c) for c in chans)
+        put32(rom, m + 0x24C + 4 * i, off)
+        rom[a + off:a + off + len(pdata)] = pdata; off += len(pdata)
+    return (a + off + 3) & ~3
+
+
+def lsplay2_block(rom, o):
+    """GBAModPlay 2003: two modules, the first looping by B00, the second ending as Driv3r's songs do (a
+    silent pattern jumping to itself), the 16-byte-entry bank after them, and the 2003 credit."""
+    rest = [(None, 0, 0, 0, 0)]
+    m1 = o + 0x1000
+    tune = [[(49, 1, 0, 0, 0)] + rest * 14 + [(None, 0, 0, 11, 0)], rest * 4 + [(56, 1, 33, 0, 0)] + rest * 11]
+    m2 = lsplay2_module(rom, m1, [0, 0], [tune])
+    end = [rest * 4 + [(None, 0, 0, 11, 1)] + rest * 11]
+    sting = [[(61, 1, 0, 0, 0)] + rest * 15]
+    bank = lsplay2_module(rom, m2, [0, 1], [sting, end])
+    struct.pack_into('<IHHHHI', rom, bank, 256, 0, 64, 0, 256, 0xFFFFFFFA)   # instrument 1, relative note -6
+    for k in range(256):
+        rom[bank + 0x1000 + k] = ((k % 32) * 7 - 112) & 255
+    text = b'LS_Play (C) Logik State 2003 (synthetic test)' + bytes(1)
+    rom[o + 0x8001:o + 0x8001 + len(text)] = text
+
+
 def kr_sample(rom, a, pan=0):
     """A 256-byte looping Krawall sample at a (a saw), as krawerter's Sample.cpp lays one out."""
     put32(rom, a, 256); put32(rom, a + 4, BASE + a + 0x12 + 256); put32(rom, a + 8, 8363)
@@ -215,6 +248,10 @@ def main():
     header(rom, b'MODPLAY TEST', b'LSPT')
     lsplay_block(rom, 0x1000)
     (out / 'lsplay.gba').write_bytes(rom)
+    rom = bytearray(0x10000)
+    header(rom, b'LSPLAY 2003', b'LSP2')
+    lsplay2_block(rom, 0x1000)
+    (out / 'lsplay2.gba').write_bytes(rom)
     if len(sys.argv) > 2:
         rom = bytearray(pathlib.Path(sys.argv[2]).read_bytes())
         o = 0xC0000

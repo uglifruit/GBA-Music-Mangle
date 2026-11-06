@@ -805,6 +805,19 @@ int main(int argc, char **argv)
         CHECK(scan_install(1, addr, rate, ls) == 1 && g_scan.engine == ENG_ID_LOGIK && g_songCount == 1,
               "GBAModPlay table from a saved slot: %u songs", g_songCount);
     }
+    if (argc > 9) {                                   // GBAModPlay's 2003 layout (Driv3r's): lsplay2.gba
+        engine_checks(argv[9], ENG_ID_LOGIK);
+        mod_set_list(0, LIST_ALL);
+        CHECK(g_songCount == 2 && g_songKind[0] == KIND_MUSIC && g_songKind[1] == KIND_SFX,
+              "GBAModPlay 2003: a looping module (music) and one ending on a silent self-jump (an effect): %u, %u %u",
+              g_songCount, g_songKind[0], g_songKind[1]);
+        play(1);
+        int ch = sounding();
+        CHECK(ch >= 0 && g_mix[ch].volL == 64, "GBAModPlay 2003: volume 64 at Driv3r's music volume (vol %u)",
+              ch >= 0 ? g_mix[ch].volL : 0);
+        for (int i = 0; i < 200; i++) g_eng->tick();
+        CHECK(!g_eng->running(), "GBAModPlay 2003: the effect stops at its end (running %d)", g_eng->running());
+    }
 
     printf("modtest: %d passed, %d failed  (Patch is %u bytes)\n", s_pass, s_fail, (unsigned)sizeof(Patch));
     return s_fail ? 1 : 0;

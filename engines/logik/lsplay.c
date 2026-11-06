@@ -156,42 +156,74 @@ void ls_init(LsPlayer *p, LsRom r, const LsHooks *hooks)
 
 // ---- the module ----
 
-#define M_CHANNELS 0x28
-#define M_ORDERS   0x38
-#define M_PATTERNS 0x1B1C
-#define M_ROWS     0x1B20
-#define M_AMIGA    0x1B24
-#define M_BPM      0x1B28
-#define M_SPEED    0x1B2C
-#define M_ORDER    0x1B30            // 256 bytes
-#define M_SIZES    0x1C30            // u32 a pattern
-#define M_DATA     0x2034
+// Two layouts carry the same magic. Version 1 (2002, Puzzle Fighter): +0x28 channels, +0x38 orders,
+// +0x1B1C patterns, +0x1B20 rows, +0x1B24 Amiga, +0x1B28 BPM, +0x1B2C speed, +0x1B30 the order list,
+// +0x1C30 each pattern's size, patterns back to back from +0x2034. Version 2 (2003, Driv3r): +0x28
+// channels, +0x34 orders, +0x13C rows, +0x140 Amiga, +0x144 BPM, +0x148 speed, +0x14C the order list,
+// +0x24C each pattern's offset from +0x650, where the patterns are (no count: the order list's largest).
+typedef struct { uint32_t ch, orders, np, rows, amiga, bpm, speed, order, table, data; uint8_t v; } Layout;
 
-int ls_module_valid(const LsRom *r, uint32_t m)
+static int layout(const LsRom *r, uint32_t m, Layout *L)
 {
-    if ((m & 3) || !ok(r, m, M_DATA) || w(r, m) != 0x4D414247u || w(r, m + 4) != 0x3033444Fu) return 0;
-    uint32_t ch = w(r, m + M_CHANNELS), orders = w(r, m + M_ORDERS), np = w(r, m + M_PATTERNS);
-    uint32_t rows = w(r, m + M_ROWS), amiga = w(r, m + M_AMIGA), bpm = w(r, m + M_BPM), speed = w(r, m + M_SPEED);
-    if (!ch || ch > LS_CHANNELS || !orders || orders > 256 || !np || np > 256 || !rows || rows > 256 ||
-        amiga > 1 || bpm < 32 || bpm > 255 || !speed || speed > 31) return 0;
-    for (uint32_t i = 0; i < orders; ++i) if (b(r, m + M_ORDER + i) >= np) return 0;
-    uint32_t a = m + M_DATA;
-    for (uint32_t i = 0; i < np; ++i) {
-        uint32_t size = w(r, m + M_SIZES + 4 * i);
-        if (size < 0x14 * ch || !ok(r, a, size)) return 0;
-        a += size;
+    if ((m & 3) || !ok(r, m, 0x650) || w(r, m) != 0x4D414247u || w(r, m + 4) != 0x3033444Fu) return 0;
+    if (ok(r, m, 0x2034) && w(r, m + 0x38) - 1u < 256u) {
+        L->v = 1; L->ch = w(r, m + 0x28); L->orders = w(r, m + 0x38); L->np = w(r, m + 0x1B1C);
+        L->rows = w(r, m + 0x1B20); L->amiga = w(r, m + 0x1B24); L->bpm = w(r, m + 0x1B28);
+        L->speed = w(r, m + 0x1B2C); L->order = m + 0x1B30; L->table = m + 0x1C30; L->data = m + 0x2034;
+    } else {
+        L->v = 2; L->ch = w(r, m + 0x28); L->orders = w(r, m + 0x34); L->rows = w(r, m + 0x13C);
+        L->amiga = w(r, m + 0x140); L->bpm = w(r, m + 0x144); L->speed = w(r, m + 0x148);
+        L->order = m + 0x14C; L->table = m + 0x24C; L->data = m + 0x650; L->np = 0;
+        if (L->orders - 1u < 256u)
+            for (uint32_t i = 0; i < L->orders; ++i) if (b(r, L->order + i) >= L->np) L->np = b(r, L->order + i) + 1u;
     }
+    if (!L->ch || L->ch > LS_CHANNELS || !L->orders || L->orders > 256 || !L->np || L->np > 256 || !L->rows ||
+        L->rows > 256 || L->amiga > 1 || L->bpm < 32 || L->bpm > 255 || !L->speed || L->speed > 31) return 0;
+    for (uint32_t i = 0; i < L->orders; ++i) if (b(r, L->order + i) >= L->np) return 0;
+    return L->v;
+}
+
+// Pattern i's first byte and the bytes it may use (version 2 stores no size: up to 64 KB).
+static int pattern_at(const LsRom *r, const Layout *L, unsigned i, uint32_t *start, uint32_t *size)
+{
+    if (L->v == 1) {
+        uint32_t a = L->data;
+        for (unsigned k = 0; k < i; ++k) a += w(r, L->table + 4 * k);
+        *start = a;
+        *size = w(r, L->table + 4 * i);
+        return ok(r, a, *size);
+    }
+    uint32_t a = L->data + w(r, L->table + 4 * i);
+    if (!ok(r, a, 0x14)) return 0;
+    uint32_t room = r->size - (a - r->base);
+    *start = a;
+    *size = room < 0x10000 ? room : 0x10000;
     return 1;
 }
 
-// Pattern i's first byte and size.
-static int pattern_at(const LsRom *r, uint32_t m, unsigned i, uint32_t *start, uint32_t *size)
+int ls_module_valid(const LsRom *r, uint32_t m)
 {
-    uint32_t a = m + M_DATA;
-    for (unsigned k = 0; k < i; ++k) a += w(r, m + M_SIZES + 4 * k);
-    *start = a;
-    *size = w(r, m + M_SIZES + 4 * i);
-    return ok(r, a, *size);
+    Layout L;
+    if (!layout(r, m, &L)) return 0;
+    for (uint32_t i = 0; i < L.np; ++i) {
+        uint32_t ps, size;
+        if (!pattern_at(r, &L, i, &ps, &size) || size < 0x14 * L.ch) return 0;
+    }
+    return L.v;
+}
+
+uint32_t ls_module_end(const LsRom *r, uint32_t m)
+{
+    Layout L;
+    if (!layout(r, m, &L)) return 0;
+    uint32_t end = 0;
+    for (uint32_t i = 0; i < L.np; ++i) {
+        uint32_t a, size;
+        if (!pattern_at(r, &L, i, &a, &size)) return 0;
+        for (uint32_t c = 0; c < L.ch && ok(r, a, 0x14); ++c) a += 0x14 + w(r, a + 0x10);
+        if (a > end) end = a;
+    }
+    return end;
 }
 
 // Channel c's three streams in a pattern: its block is {+4 volume stream, +8 effect stream, +16 the
@@ -236,11 +268,12 @@ static int stream_row(const LsRom *r, LsStream *s, int wide, uint32_t end, int f
 int ls_module_instruments(const LsRom *r, uint32_t m, uint32_t used[4])
 {
     for (int i = 0; i < 4; ++i) used[i] = 0;
-    if (!ls_module_valid(r, m)) return 0;
-    unsigned ch = w(r, m + M_CHANNELS), np = w(r, m + M_PATTERNS), rows = w(r, m + M_ROWS);
+    Layout L;
+    if (!ls_module_valid(r, m) || !layout(r, m, &L)) return 0;
+    unsigned ch = L.ch, np = L.np, rows = L.rows;
     for (unsigned i = 0; i < np; ++i) {
         uint32_t ps, size;
-        if (!pattern_at(r, m, i, &ps, &size)) return 0;
+        if (!pattern_at(r, &L, i, &ps, &size)) return 0;
         for (unsigned c = 0; c < ch; ++c) {
             LsStream s[3];
             if (!streams_at(r, ps, size, c, s)) return 0;
@@ -255,31 +288,48 @@ int ls_module_instruments(const LsRom *r, uint32_t m, uint32_t used[4])
     return 1;
 }
 
-unsigned ls_bank_valid(const LsRom *r, uint32_t a, const uint32_t *used)
+// An instrument: version 1 12 bytes {length, finetune, volume, loop start, loop length, relative note}
+// (u16s) from the bank's start, the samples from +0xC00; version 2 16 bytes {length u32, finetune,
+// volume, loop start, loop length, relative note u32}, the samples from +0x1000.
+#define BANK_TABLE(v) ((v) == 2 ? 0x1000u : LS_BANK_SIZE)
+#define BANK_ENTRY(v) ((v) == 2 ? 16u : 12u)
+static void inst(const LsRom *r, uint32_t e, int v, unsigned *len, unsigned *fine, unsigned *vol, unsigned *ls,
+                 unsigned *ll, unsigned *rel)
 {
-    if ((a & 3) || !ok(r, a, LS_BANK_SIZE)) return 0;
+    if (v == 2) { *len = w(r, e) > 0xFFFF ? 0xFFFF : w(r, e); e += 2; }
+    else *len = h(r, e);
+    *fine = h(r, e + 2); *vol = h(r, e + 4); *ls = h(r, e + 6); *ll = h(r, e + 8); *rel = h(r, e + 10);
+}
+
+unsigned ls_bank_valid(const LsRom *r, uint32_t a, const uint32_t *used, int v)
+{
+    if ((a & 3) || !ok(r, a, BANK_TABLE(v))) return 0;
     uint32_t total = 0;
     unsigned n = 0;
     for (unsigned i = 0; i < 256; ++i) {
-        uint32_t e = a + i * 12;
-        unsigned len = h(r, e), vol = h(r, e + 4), ls = h(r, e + 6), ll = h(r, e + 8), rel = h(r, e + 10);
+        uint32_t e = a + i * BANK_ENTRY(v);
+        unsigned len, fine, vol, ls, ll, rel;
+        if (v == 2 && w(r, e) > 0xFFFF) return 0;
+        inst(r, e, v, &len, &fine, &vol, &ls, &ll, &rel);
+        (void)fine;
         if (!len) {
             if (used && i < 127 && (used[(i + 1) >> 5] >> ((i + 1) & 31)) & 1) return 0;
             continue;
         }
-        if (vol > 64 || ls + ll > len || rel > 96) return 0;
+        if (vol > 64 || ls + ll > len || (int16_t)rel < -96 || (int16_t)rel > 96) return 0;   // rel is signed
         total += len;
         ++n;
     }
-    return n && ok(r, a + LS_BANK_SIZE, total) ? n : 0;
+    return n && ok(r, a + BANK_TABLE(v), total) ? n : 0;
 }
 
 // The order list walked with its jumps (B, D): ticks to the end, or to an order seen before (a loop).
 int ls_module_shape(const LsRom *r, uint32_t m, uint32_t *ticks, int *loops)
 {
     *ticks = 0; *loops = 0;
-    if (!ls_module_valid(r, m)) return 0;
-    unsigned ch = w(r, m + M_CHANNELS), orders = w(r, m + M_ORDERS), rows = w(r, m + M_ROWS), speed = w(r, m + M_SPEED);
+    Layout L;
+    if (!ls_module_valid(r, m) || !layout(r, m, &L)) return 0;
+    unsigned ch = L.ch, orders = L.orders, rows = L.rows, speed = L.speed;
     uint32_t seen[8], total = 0;
     for (int i = 0; i < 8; ++i) seen[i] = 0;
     unsigned order = 0, start_row = 0;
@@ -290,21 +340,24 @@ int ls_module_shape(const LsRom *r, uint32_t m, uint32_t *ticks, int *loops)
             seen[order >> 5] |= 1u << (order & 31);
         }
         uint32_t ps, size;
-        if (!pattern_at(r, m, b(r, m + M_ORDER + order), &ps, &size)) return 0;
-        LsStream s[LS_CHANNELS];
+        if (!pattern_at(r, &L, b(r, L.order + order), &ps, &size)) return 0;
+        LsStream s[LS_CHANNELS], sn[LS_CHANNELS];
         for (unsigned c = 0; c < ch; ++c) {
             LsStream three[3];
             if (!streams_at(r, ps, size, c, three)) return 0;
-            s[c] = three[2];
+            s[c] = three[2]; sn[c] = three[0];
         }
-        unsigned next = order + 1, row_to = 0, jumped = 0;
+        unsigned next = order + 1, row_to = 0, jumped = 0, notes = 0;
         for (unsigned row = 0; row < rows && !jumped; ++row) {
             for (unsigned c = 0; c < ch; ++c) {
-                uint16_t v;
-                if (!stream_row(r, &s[c], 1, ps + size, row == 0, &v)) return 0;
+                uint16_t v, nv;
+                if (!stream_row(r, &s[c], 1, ps + size, row == 0, &v) ||
+                    !stream_row(r, &sn[c], 1, ps + size, row == 0, &nv)) return 0;
                 unsigned fx = v >> 8, prm = v & 255;
                 if (row < start_row) continue;
+                if ((nv >> 7) != NONE) ++notes;
                 if (fx == 15 && prm && prm <= 0x1F) speed = prm;
+                if (fx == 11 && !jumped && prm == order && !notes) { *ticks = total; return 1; }   // the end: see process()
                 if (fx == 11 && !jumped) { next = prm; row_to = 0; jumped = 1; }
                 if (fx == 13 && !jumped) { next = order + 1 < orders ? order + 1 : 0; row_to = prm; jumped = 1; }
             }
@@ -343,7 +396,7 @@ static uint32_t track_freq(LsPlayer *p, LsTrack *t)
     int u = p->mods.pitch >> 2;      // Q8 semitones -> 64ths of a semitone (768 an octave)
     if (p->linear) {
         int period = (uint16_t)(7616 - (t->rel + t->note - 2) * 64 - (t->fine >> 1));
-        return freq_linear(period + t->lin - u);
+        return freq_linear(period + t->lin + t->vib_lin - u);
     }
     int i = clamp(t->fine + t->note, 0, 511);
     int period = kAmiga[i] + t->amiga + t->vib;
@@ -383,10 +436,13 @@ static uint32_t entry_of(LsPlayer *p, unsigned ins, uint32_t *data)
 {
     int i = (int)ins + p->mods.voice_shift;
     if (i < 0 || i > 255) return 0;
-    uint32_t e = p->bank + (uint32_t)i * 12 + (uint32_t)(int32_t)p->mods.table_offset;
-    if (!ok(&p->rom, e, 12)) return 0;
-    uint32_t a = p->bank + LS_BANK_SIZE;
-    for (int k = 0; k < i; ++k) a += h(&p->rom, p->bank + (uint32_t)k * 12);
+    uint32_t e = p->bank + (uint32_t)i * BANK_ENTRY(p->version) + (uint32_t)(int32_t)p->mods.table_offset;
+    if (!ok(&p->rom, e, 16)) return 0;
+    uint32_t a = p->bank + BANK_TABLE(p->version);
+    for (int k = 0; k < i; ++k) {
+        uint32_t len = p->version == 2 ? w(&p->rom, p->bank + (uint32_t)k * 16) : h(&p->rom, p->bank + (uint32_t)k * 12);
+        a += len > 0xFFFF ? 0xFFFF : len;
+    }
     *data = a;
     return e;
 }
@@ -394,7 +450,10 @@ static uint32_t entry_of(LsPlayer *p, unsigned ins, uint32_t *data)
 static unsigned ins_volume(LsPlayer *p, unsigned ins)
 {
     uint32_t d, e = entry_of(p, ins, &d);
-    return e ? h(&p->rom, e + 4) : 0;
+    unsigned len, fine, vol, ls, ll, rel;
+    if (!e) return 0;
+    inst(&p->rom, e, p->version, &len, &fine, &vol, &ls, &ll, &rel);
+    return vol;
 }
 
 static void note_on(LsPlayer *p, unsigned c, unsigned note)
@@ -407,11 +466,12 @@ static void note_on(LsPlayer *p, unsigned c, unsigned note)
     if (random8(p) < p->mods.drop_chance) return;
     uint32_t data, e = entry_of(p, t->ins, &data);
     if (!e) return;
-    unsigned len = h(r, e), ls = h(r, e + 6), ll = h(r, e + 8);
-    t->fine = (int16_t)h(r, e + 2);
-    t->rel = (int16_t)h(r, e + 10);
+    unsigned len, fine, vol, ls, ll, rel;
+    inst(r, e, p->version, &len, &fine, &vol, &ls, &ll, &rel);
+    t->fine = (int16_t)fine;
+    t->rel = (int16_t)rel;
     t->note = (uint16_t)note;
-    t->lin = 0; t->porta_mem = 0;
+    t->lin = 0; t->porta_mem = 0; t->vib_lin = 0;
     if (!len) return;                 // the driver mixes nothing (its end is 0)
     uint32_t size = len, loop = ll ? ls : LS_NOLOOP;
     unsigned chop = (size * p->mods.sample_end) >> 8;
@@ -464,11 +524,12 @@ static void process(LsPlayer *p, unsigned c)
         ins = 0;
     }
     t->kind = -1;
-    t->vib = 0;
+    if (p->version == 1 || fx != 4) t->vib = 0;       // version 2 keeps a vibrato going
     if (note == NONE) {
         if (ins) { t->ins = (uint16_t)(ins - 1); t->vol = (int16_t)ins_volume(p, t->ins); }
     } else {
         if (ins) { t->ins = (uint16_t)(ins - 1); t->vol = (int16_t)ins_volume(p, t->ins); }
+        ++p->pattern_notes;
         note_on(p, c, note);
         if (fx != 3) t->amiga = 0;
     }
@@ -487,13 +548,19 @@ static void process(LsPlayer *p, unsigned c)
         break;
     case 4:
         t->kind = 4;
-        if (x || y) { t->vib_speed = (uint8_t)x; t->vib_depth = (uint8_t)y; }
+        if (p->version == 1) { if (x || y) { t->vib_speed = (uint8_t)x; t->vib_depth = (uint8_t)y; } }
+        else {                                    // each nibble if given; either restarts the sine
+            if (x) t->vib_speed = (uint8_t)x;
+            if (y) t->vib_depth = (uint8_t)y;
+            if (x || y) t->vib_pos = 0;
+        }
         break;
     case 5: case 6: case 10:
         t->kind = (int8_t)fx; t->vsl_up = (uint8_t)x; t->vsl_down = (uint8_t)y;
         break;
     case 11:                                      // position jump: the row's end goes to order prm
-        if (prm <= p->order) { ++p->loops; event(p, LS_EVENT_LOOP, p->loops); }
+        if (prm == p->order && !p->pattern_notes) { p->ended = 1; break; }   // a silent pattern holding itself:
+        if (prm <= p->order) { ++p->loops; event(p, LS_EVENT_LOOP, p->loops); }   // the song's end (Driv3r)
         p->order = (uint16_t)(prm - 1);
         p->row = p->rows;
         break;
@@ -528,7 +595,9 @@ static void process(LsPlayer *p, unsigned c)
 static int read_cells(LsPlayer *p, unsigned row)
 {
     uint32_t ps, size;
-    if (!pattern_at(&p->rom, p->module, b(&p->rom, p->module + M_ORDER + p->order), &ps, &size)) return fail(p, p->module);
+    Layout L;
+    if (!layout(&p->rom, p->module, &L) || !pattern_at(&p->rom, &L, b(&p->rom, L.order + p->order), &ps, &size))
+        return fail(p, p->module);
     for (unsigned c = 0; c < p->channels; ++c) {
         LsTrack *t = &p->tracks[c];
         if (row == 0 && !streams_at(&p->rom, ps, size, c, t->s)) return fail(p, ps);
@@ -555,25 +624,30 @@ static void read_row(LsPlayer *p)
 {
     p->broke = 0;
     p->counter = 0;
+    if (p->row == 0) p->pattern_notes = 0;
     if (!read_cells(p, p->row)) return;
     ++p->row;
-    p->seek = 0;
+    p->seek = 0; p->ended = 0;
     for (unsigned c = 0; c < p->channels && p->running; ++c) process(p, c);
     event(p, LS_EVENT_ROW, ((uint32_t)p->order << 16) | p->row);
     if (p->seek) { position(p, p->seek_order, p->seek_row); return; }  // after every channel's cell
-    if (p->row < p->rows) return;
-    p->row = 0;
-    if (++p->order < p->orders) return;
-    p->order = 0;                                // the driver stops here (its playing flag goes to 0)
+    if (!p->ended) {
+        if (p->row < p->rows) return;
+        p->row = 0;
+        if (++p->order < p->orders) return;
+    }
+    p->order = 0; p->row = 0;                    // the driver stops here (its playing flag goes to 0)
+    for (unsigned c = 0; c < LS_CHANNELS; ++c) off(p, c);
     if (!p->repeat) { ls_stop(p); return; }
     ++p->loops;
     event(p, LS_EVENT_LOOP, p->loops);
 }
 
-// The driver's tick effects, on its first four channels only (its loop stops at 3).
+// The driver's tick effects: version 1 on its first four channels only (its loop stops at 3), version
+// 2 on every channel.
 static void effects(LsPlayer *p)
 {
-    for (unsigned c = 0; c < p->channels && c < 4; ++c) {
+    for (unsigned c = 0; c < p->channels && (p->version == 2 || c < 4); ++c) {
         LsTrack *t = &p->tracks[c];
         switch (t->kind) {
         case 1: case 2:
@@ -601,9 +675,16 @@ static void effects(LsPlayer *p)
             if (t->kind == 5) volume_slide(p, t);
             break;
         case 4: case 6:
-            if (!p->counter) t->vib_pos = 0;      // the driver starts its sine again every row
-            t->vib = (int16_t)((((t->vib_pos & 32) ? -kSine[t->vib_pos & 31] : kSine[t->vib_pos & 31]) * t->vib_depth) >> 7);
-            t->vib_pos = (uint8_t)((t->vib_pos + t->vib_speed) & 63);
+            if (p->version == 2 && p->linear) {   // version 2: XM's linear vibrato
+                int v = (kSine[(t->vib_pos >> 2) & 31] * t->vib_depth) >> 5;
+                t->vib_lin = t->vib_pos > 31 ? -v : v;
+                t->vib_pos = (uint8_t)((t->vib_pos + ((t->vib_speed + 4) >> 1)) & 63);
+                recompute(p, c);
+            } else {
+                if (p->version == 1 && !p->counter) t->vib_pos = 0;   // version 1 starts its sine every row
+                t->vib = (int16_t)((((t->vib_pos & 32) ? -kSine[t->vib_pos & 31] : kSine[t->vib_pos & 31]) * t->vib_depth) >> 7);
+                t->vib_pos = (uint8_t)((t->vib_pos + t->vib_speed) & 63);
+            }
             if (t->kind == 6) volume_slide(p, t);
             break;
         case 10: volume_slide(p, t); break;
@@ -647,16 +728,18 @@ int ls_start(LsPlayer *p, uint32_t m, uint32_t bank)
 {
     ls_stop(p);
     zero(p->tracks, sizeof(p->tracks));
-    if (!ls_module_valid(&p->rom, m) || !ls_bank_valid(&p->rom, bank, 0)) return 0;
-    const LsRom *r = &p->rom;
-    p->module = m; p->bank = bank;
-    p->channels = (uint16_t)w(r, m + M_CHANNELS);
-    p->orders = (uint16_t)w(r, m + M_ORDERS);
-    p->pattern_count = (uint16_t)w(r, m + M_PATTERNS);
-    p->rows = (uint16_t)w(r, m + M_ROWS);
-    p->linear = !w(r, m + M_AMIGA);
-    p->bpm = (uint16_t)w(r, m + M_BPM);
-    p->speed = (uint16_t)w(r, m + M_SPEED);
+    Layout L;
+    int v = ls_module_valid(&p->rom, m);
+    if (!v || !layout(&p->rom, m, &L) || !ls_bank_valid(&p->rom, bank, 0, v)) return 0;
+    p->module = m; p->bank = bank; p->version = (uint8_t)v;
+    p->channels = (uint16_t)(v == 2 && L.ch > 8 ? 8 : L.ch);   // version 2's driver plays 8 at most
+    p->orders = (uint16_t)L.orders;
+    p->pattern_count = (uint16_t)L.np;
+    p->rows = (uint16_t)L.rows;
+    p->linear = !L.amiga;
+    p->bpm = (uint16_t)L.bpm;
+    p->speed = (uint16_t)L.speed;
+    p->music_volume = v == 2 ? 64 : 90;          // the games' own: Driv3r sets 64, Puzzle Fighter 90
     p->order = p->row = p->tick = p->counter = 0;
     p->error = 0; p->unsupported = 0; p->loops = 0;
     for (unsigned c = 0; c < LS_CHANNELS; ++c) p->tracks[c].kind = -1;
