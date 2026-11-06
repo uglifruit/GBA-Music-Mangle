@@ -54,10 +54,18 @@ Dumps of four of Andy's carts settled what the hardware reports could not:
   changes, so every part played the first sound (on Denki, a PSG macro). Fixed in `ms_start`. Still
   silent then: the parts written for the Game Boy channels (VOICE_ON / SETNOISE / HARDENVELOPE; the
   CAL row shows `PSG`), which now play too (musyx.c keeps the four channels' state, eng_musyx.c writes
-  the registers, pcplay emulates them). Keymaps (drum kits, multisampled instruments) now play: every one is reached
-  through PLAYMACRO, whose key offset says where the map starts, and its entries transpose each note
-  (see musyx.c, KEYMAPS). Harry Potter: Chamber of Secrets was hidden by reading the sample root key
-  as two bytes; it is one.
+  the registers, pcplay emulates them). Keymaps (drum kits, multisampled instruments) now play.
+  Harry Potter: Chamber of Secrets was hidden by reading the sample root key as two bytes; it is one.
+- **MusyX follows the cart's own driver (2026-11-06).** Lady Sia and Go! Go! Beckham sounded unlike
+  the games, so the driver in the dumps was disassembled (its macro interpreter is a 54-entry table
+  of Thumb handlers, the same in all eleven MusyX carts). musyx.c's "the voices" now does what it
+  does: macros, ADSRs (op 14), fades (op 21) and pitch modulators run once a video frame (WAIT
+  counts frames; they ran on the 96-PPQN tick, about three times fast); tracks 0-3 play on the
+  Game Boy channels and 4-15 on PCM voices; key-off only marks a voice and END leaves its sample
+  playing; op 29 plays a keymap entry and the macro carries on (it was taken for PLAYMACRO and ended
+  the macro, losing the strings' volume and release); the splits were inverted. The mix is the
+  driver's: its pan law, our mixer at full gain, and the Game Boy channels at 50 % (SOUNDCNT_H
+  0x9A0D), which had been about 9 dB too strong against the samples. CLAUDE.md has the details.
 - **Krawall (Lemony Snicket): not found.** The cart has no "Krawall" text, only the player's CVS line
   `$Id: player.c,v 1.4 2003/03/19 ... seb Exp`, now a signature when "seb" (the author) follows. Its
   20 modules then play. Discovery was also brought in line with UnkrawerterGBA (banks judged on
@@ -100,8 +108,8 @@ Dumps of four of Andy's carts settled what the hardware reports could not:
 - **One mixer:** `MIX_F_UNSIGNED` is in `payload/mixer.c` (one EOR per fetch; MP2K's WAVs are
   byte-identical). `engines/common/eng.h` holds `EngRom`/`EngVoice`/`EngHooks`; the three engine
   headers typedef their own names to them (each engine's own tests still pass).
-  `engines/common/eng_mixer.c` is the one adapter, with a volume shift per engine (MusyX: 1, as
-  its hardware-tested trial ran at half gain). The engines' `pcm_mixer.c` copies are not linked.
+  `engines/common/eng_mixer.c` is the one adapter, with a volume shift per engine (MusyX: 0 since
+  2026-11-06, when musyx.c took its driver's own levels and pan law; 1 before). The engines' `pcm_mixer.c` copies are not linked.
 - **The dispatcher** is `payload/engine.h/.c`, a table of functions per engine, reached through
   `g_eng`. **The view is not a new `EngView` struct**: it is the transport state mod.c and ui.c
   already read (`g_tracks` lanes, `g_plTicks`, `g_plLoops`, `g_plStarts`, `g_plClockOut`,
@@ -251,7 +259,7 @@ asks `g_eng->tick_hz_q16()` for the INT rate. Each engine converts:
 |---|---|---|
 | MP2K | one `player_tick()` | as now |
 | Krawall | one `kr_tick()` | 6 ticks/row × 4 rows/beat = 24 per beat: native. Speed commands change ticks per row, so a "beat" follows the module. |
-| MusyX | four `ms_tick()` | 96 PPQN native |
+| MusyX | four `ms_tick()` | 96 PPQN native; its macros and envelopes run on `ms_frame()` (59.73 Hz), as its driver's do |
 | GAX | `speed × rowsPerBeat ÷ 24` `gx_frame()`s, accumulated in Q8 | GAX is frame-based (envelopes and performance lists run per frame). INT simply runs frames at 59.73 Hz × tempo. EXT schedules frames so that rows land on the clock, assuming 4 rows a beat. **Labelled approximate**; the GAX branch itself warns against pretending otherwise. |
 
 A stopped clock holds notes for every engine: the mixer keeps running whatever the sequencer does.

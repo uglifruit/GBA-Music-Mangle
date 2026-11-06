@@ -17,8 +17,8 @@ def make_demo():
     data[0x148:0x14D]=bytes([255,0,0,0,0])
     data[0x160:0x164]=bytes([255,0,0,0])
     put(0x164,'BBHI',15,0,1,0) # STARTSAMPLE 1
-    put(0x16C,'BBH',4,0,65535) # WAIT_TICKS forever, until note-off
-    data[0x170]=0
+    put(0x16C,'BBH',4,1,65535) # WAIT for ever, until key-off (flag 1)
+    data[0x170:0x173]=bytes([5,0,0]) # STOP the sound, END
     rel(0x200,0x208);rel(0x204,0x328)
     put(0x208,'IiHHI',256,-1,16384,60,0)
     put(0x328,'IiHHI',256,0,16384,60,0)
@@ -26,7 +26,8 @@ def make_demo():
     put(0x500,'I',1);rel(0x504,0x600)
     put(0x610,'HBB',1,0,8);put(0x810,'HBB',1,0,8)
     song=0xA10;rel(song,0xA20,song);rel(song+4,0xA70,song);put(song+8,'H',120)
-    rel(0xA20,0xA90,song);rel(0xA20+16*4,0xAD0,song)
+    # The notes are on track 4: the driver plays tracks 0-3 on the Game Boy channels, 4-15 on PCM voices.
+    rel(0xA20+4*4,0xA90,song);rel(0xA20+16*4,0xAD0,song)
     for i,a in enumerate([0xB10,0xB30,0xB50]):rel(0xA70+4*i,a,song)
     put(0xA90,'iiiiiiii',0,0,96,1,96,-2,0,0)
     put(0xAD0,'iiiiii',0,2,192,-1,0,0)

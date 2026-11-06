@@ -1,11 +1,13 @@
 // eng_musyx.c — MusyX (Factor 5) behind the shared transport. See eng_core.h.
 //
-// 96 PPQN native, so one tick is four of its. It reads the mods live (pitch and volume are
+// 96 PPQN native, so one tick is four of its. The macros, envelopes and pitch modulators run on the
+// video frame (frame(), as the cart's driver runs them in VBlank), so they keep their speed whatever
+// the clock does, and a stopped clock holds notes. It reads the mods live (pitch and volume are
 // recomputed on every update), so a bar snapshot only holds the sequence: the tracks, the tick
 // count, the tempo and its dice. Voices keep ringing across a jump, as MP2K's do.
 //
 // The Game Boy channels: musyx.c keeps their state (MsPsg); psg_push() writes it to the sound
-// registers after every native tick and update, touching a channel only when something changed.
+// registers after every native tick, frame and update, touching a channel only when something changed.
 // The hardware takes a new volume or envelope only when a channel is restarted, so a change of either
 // restarts it (as cgb.c does for MP2K); a pitch change alone does not. MP2K and MusyX never play at
 // once, so the channels are free while this engine runs.
@@ -54,6 +56,10 @@ static void psg_reset(void)
     R8(0x60) = 8; R8(0x80) = 0x77;
     for (unsigned ch = 0; ch < MS_PSG; ch++) { psg_silence(ch); s_out[ch].wave = 0; }
 }
+
+// SOUNDCNT_H bits 0-1, the PSG's share of the mix: MusyX's driver sets 50 % (its init writes 0x9A0D);
+// audio_init() and MP2K use 100 %. Set at start, put back at stop.
+static void psg_share(unsigned bits) { R8(0x82) = (uint8_t)((R8(0x82) & ~3u) | bits); }
 
 #ifdef HOST
 uint8_t g_hostWave[32];                // what both banks of wave RAM hold (pcplay's emulator reads it)
@@ -106,7 +112,9 @@ static void psg_push(void)
             R8(kNrx3[ch]) = (uint8_t)freq;
             R8(kNrx4[ch]) = (uint8_t)(freq >> 8);
         }
-        R8(0x81) |= (uint8_t)(0x11u << ch);
+        // NR51: the pan's three places (left 0-41, both, right 86+)
+        unsigned lr = s->pan < 42 ? 0x10u : s->pan > 85 ? 0x01u : 0x11u;
+        R8(0x81) = (uint8_t)((R8(0x81) & ~(0x11u << ch)) | (lr << ch));
         o->on = 1; o->nrx2 = (uint8_t)nrx2; o->duty = s->duty; o->freq = (uint16_t)freq; o->wave = s->wave;
         o->wave_len = s->wave_len;
         s->trigger = 0;
@@ -133,7 +141,7 @@ static void ready(void)
     EngHooks h;
     s_mix.rom = &s_ms.rom;
     s_mix.flags = 0;                   // signed samples, like MP2K's
-    s_mix.volShift = 1;                // half volume, as the trial that sounded right (Lady Sia)
+    s_mix.volShift = 0;                // musyx.c gives the driver's own levels (its pan law included)
     eng_mixer_hooks(&h, &s_mix);
     ms_init(&s_ms, eng_cart_rom(), &h);
     s_ready = 1;
@@ -186,11 +194,12 @@ static int start(int n)
     s_ms.repeat = (uint8_t)(g_plRepeat && !g_plOnce);
     psg_reset();
     if (!ms_start(&s_ms, &song)) return 0;
+    psg_share(1);
     copy_bytes(&s_last, &s_ms.mods, sizeof(MsMods));
     return 1;
 }
 
-static void stop(void) { if (s_ready) { ms_stop(&s_ms); psg_reset(); } }
+static void stop(void) { if (s_ready) { ms_stop(&s_ms); psg_reset(); psg_share(2); } }
 static int  running(void) { return s_ready && s_ms.running; }
 static uint32_t loops(void) { return s_ms.loops; }
 
@@ -218,10 +227,17 @@ static void snap_restore(void)
     s_ms.bpm   = s_snapBpm;
     s_ms.rng   = s_snapRng;
     // A held note (no length) waits for a note-off the jump may skip: let the next tick release it.
-    for (int i = 0; i < MS_VOICES; ++i) {
+    for (int i = 0; i < MS_ALL; ++i) {
         MsVoice *v = &s_ms.voices[i];
-        if (v->active && !v->released && !v->gate_left) v->gate_left = 1;
+        if (v->active && !v->keyed && !v->gate_left) v->gate_left = 1;
     }
+}
+
+static void frame(void)
+{
+    if (!s_ready || !s_ms.running) return;
+    ms_frame(&s_ms);
+    psg_push();
 }
 
 // 96-PPQN ticks a second in Q16, the tempo mangle in it. A 24-PPQN tick is four, and tempoI = 24-PPQN
@@ -234,20 +250,18 @@ static uint32_t tempo_i(void)
 
 static void diag(char *t, int a)
 {
-    // Unknown opcodes (two masks), warnings, why voices were turned away (MS_WHY_*), E1 once the
-    // decoder stopped on bad data, and PSG when a macro asked for a Game Boy channel (VOICE_ON,
-    // SETNOISE, HARDENVELOPE: notes that play silently here, since only PCM voices are rendered).
+    // Unknown opcodes (two masks), warnings, why voices were turned away (MS_WHY_*), and E1 once the
+    // decoder stopped on bad data.
     t[a++] = ' '; t[a++] = 'U'; a = eng_put_hex(t, a, s_ms.unsupported[0], 8);
     t[a++] = ':'; a = eng_put_hex(t, a, s_ms.unsupported[1], 8);
     t[a++] = ' '; t[a++] = 'W'; a = eng_put_hex(t, a, s_ms.warnings, 2);
     t[a++] = ' '; t[a++] = 'R'; a = eng_put_hex(t, a, s_ms.why, 1);
     t[a++] = ' '; t[a++] = 'E'; t[a++] = s_ms.error ? '1' : '0';
-    if (s_ms.unsupported[1] & 0x33u) { t[a++] = ' '; t[a++] = 'P'; t[a++] = 'S'; t[a++] = 'G'; }
     t[a] = 0;
 }
 
 static const EngCore s_core = {
-    start, stop, running, tick, loops, snap_take, snap_restore, 0, lanes, sync, tempo_i, diag,
+    start, stop, running, tick, loops, snap_take, snap_restore, 0, lanes, sync, tempo_i, diag, frame,
 };
 
 // MP2K's own envelopes, note length and LFO act inside player.c; MusyX has none of them yet.

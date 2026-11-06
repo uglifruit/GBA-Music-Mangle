@@ -186,7 +186,7 @@ int krw_scan_note(char *t)
 }
 
 static const EngCore s_core = {
-    start, stop, running, tick, loops, snap_take, snap_restore, restart_loop, lanes, sync, tempo_i, diag,
+    start, stop, running, tick, loops, snap_take, snap_restore, restart_loop, lanes, sync, tempo_i, diag, 0,
 };
 
 #define KR_UNSUPPORTED ((1u << DEST_ATTACK) | (1u << DEST_DECAY) | (1u << DEST_SUSTAIN) | \

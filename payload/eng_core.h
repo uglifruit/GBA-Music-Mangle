@@ -24,6 +24,7 @@ typedef struct EngCore {
     void     (*sync)(void);            // push g_mods into the engine; called every millisecond
     uint32_t (*tempo_i)(void);
     void     (*diag)(char *t, int a);  // append this engine's CAL text at t[a] (NUL-terminated)
+    void     (*frame)(void);           // one video frame (59.73 Hz) while running, or NULL (MusyX's macros)
 } EngCore;
 
 // The cart, as the engines read it (bus addresses, host-mapped under -DHOST).

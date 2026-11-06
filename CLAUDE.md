@@ -156,55 +156,48 @@ an assistant.
   derived from them. pcplay cannot open a path with an apostrophe: copy to short names.
 - **MusyX "notes but silence" was the starting program.** A song group opens with 16 bytes, each MIDI
   channel's starting program; tracks started on program 0, and these songs send no program changes,
-  so every part played sound-list entry 0 (on Denki a PSG macro). Fixed in `ms_start`: Denki now
-  plays. Still open on MusyX:
-  - **PSG parts (implemented 2026-11-03, against the dumps; not heard on hardware yet).** The macro
-    header's first byte is the hardware voice: 0/1 squares (VOICE_ON + HARDENVELOPE only), 2 wave
-    (only STARTSAMPLE, of 16/32-byte waveforms flagged +11 = 1), 3 noise (SETNOISE), 4+ a PCM voice,
-    255 any. "Any" with a PSG command takes the TRACK's channel when the track is 0..3 (GB manual:
-    MIDI channels 1-4 map to voices 1-4; Harry Potter CoS's PSG parts sit exactly there), else noise
-    / a square by parity. musyx.c keeps `MsPsg psg[4]`; eng_musyx.c `psg_push()` writes registers after
-    every native tick; pcplay emulates them (tools/pcplay/psgemu.c, `--no-psg` to leave out).
-    Commands added with it, from the data: 2 SETVOLUME (Denki's echoes 127..70), 6 LOOP n times to a
-    s16 offset (Denki's arpeggios), 8 SETNOTE absolute key + detune (arpeggio steps 84 86 88 91; drum
-    macros pin a key), 13 GOTO may land in another macro (Harry Potter's shared tails: allowed within
-    the macro region, `macro_lo/hi`). GUESSES to check by ear: HARDENVELOPE's byte is step+direction
-    only (its volume nibble is always 0 in the data), volume from the note; WAITs stay on the 96-PPQN
-    tick (arpeggios may run fast if MusyX times them per frame).
-  - Fixed 2026-11-05 after Andy heard Lady Sia's first song with a wrong low part: op 9 is ADDNOTE
-    {flag, detune, semitones s8}: flag 1 adds to the played note ("org. key"), 0 to the pitch so far.
-    It had been read as an absolute pitch, so SETNOTE[01 00 e8] (note - 24) sat at the bottom of the
-    range. And the wave channel: 32-byte waveforms are 64 steps (both banks, NR30 = 0xA0), 16-byte
-    ones 32 steps; no +12 any more (one frequency table for all channels, as m4a). Lady Sia's song 2
-    doubles a square (note - 24) with a 32-byte wave at the note, which the 64-step mode puts in
-    unison: the evidence for both.
-  - `C30` (8 bytes, e.g. `00000000ff4400`) appears in layer-like macros that start nothing else.
-- **HARDWARE CHECKS ANDY HAS BEEN ASKED FOR (2026-11-03):** Go! Go! Beckham's and Lady Sia's drum kits
-  (transpose 0, so they play about two octaves under their samples' own pitch: right or too deep?);
-  the MusyX PSG parts (Denki Blocks, Harry Potter CoS, Lady Sia, Ready 2 Rumble): arpeggio speed,
-  envelopes, the wave channel's octave.
-- **Keymaps (implemented 2026-11-03; drum kits and multisampled instruments):** header byte 2 = 1,
-  a u16 count, entries {sample u16, TRANSPOSE s16 in 1/256 semitone, 4 bytes (pan? flags?)}. The
-  transpose is constant across a zone (Rayman HR km 66: +16/+6/-4 over three samples) and falls by
-  one per entry in drum kits, so every hit lands on its sample's own key. EVERY keymap in ten games
-  is reached through PLAYMACRO (op 29: byte, macro u16, key offset s16 in SEMITONES), and the offset
-  is where the map starts: -36 in most games, -24 in BattleBots and Spider-Man, per macro in Lady
-  Sia (-36 -46 -56 -59). So: entry = note + key_add (MsVoice.key_add sums the offsets), pitch = note
-  + transpose (the original note: that is what gives drums their natural pitch). Every note the
-  songs send fits; outside the map plays the nearest entry and warns (W 0x20, never seen yet).
-  - Two bugs fixed with it: PLAYMACRO into a keymap ran on from ip 0 and rejected the voice (the
-    `R8` everywhere), and its offset was added to the pitch as Q8 minus 60 semitones.
-  - Entry byte 4 is pan (steps of 5 across piano-like maps); byte 6 is a flag, meaning unknown. A
-    "flag 1 + transpose 0 = the sample's own key" rule was tried (b487f7e) and WITHDRAWN the same day:
-    the "low thump" Andy heard in Lady Sia was a PSG part pinned low by the ADDNOTE bug, not drums,
-    and Ace's map shares one sample across keys (entries 2-5 = sample 50), which needs pitch tracking.
-    Keymaps are note + transpose throughout. Beckham's / Lady Sia's transpose-0 kits still want ears.
-  - The mixes are loud now (Rayman, Incredibles, Ace peak at full scale) but clip on at most 0.03 %
-    of samples.
-  - **The sample root key is a byte at +10** (fixed 2026-11-03): +11 is something else (1 on Harry
-    Potter CoS's 16/32-byte waveform samples and on two of Lady Sia's). The u16 read hid Harry Potter
-    entirely and rejected those two Lady Sia samples, so Lady Sia was missing notes on hardware
-    (`R4` on five songs, one song silent); they play now.
+  so every part played sound-list entry 0. Fixed in `ms_start`.
+- **The sample root key is a byte at +10** (+11 is 1 on wave-channel waveforms). A u16 read hid Harry
+  Potter CoS and rejected two Lady Sia samples.
+- **MusyX now follows the cart's own driver (2026-11-06)**, read from its code with capstone
+  (`pip install capstone`; scratchpad tools mxdis.py / mxfn.py / mxraw.py / mxbl.py). Andy heard Lady
+  Sia and Beckham as "not like the game: envelopes or sound choices". The SMaL interpreter is a
+  54-entry jump table of Thumb handlers (Lady Sia 0x083F4568; same layout in all eleven MusyX carts,
+  small variants in Incredibles/Rayman/Star Wars/HP). What it showed, all in musyx.c's "the voices":
+  - **Macros, envelopes and pitch modulators run once a video frame** (the game's VBlank), so WAIT
+    counts frames: `ms_frame()`, via the new `EngCore.frame` (tr_frame). Notes start and end on the
+    tick; a tick's notes ALL get voices before their first macro steps run (a one-shot chord would
+    otherwise free and retake one voice). We ran macros on the 96-PPQN tick: ~3x fast, tempo-bound.
+  - **Tracks 0-3 play on the Game Boy channels, 4-15 on PCM voices.** A command for the other kind of
+    voice does nothing (so PCM macros on 0-3 and square macros on 4+ are silent, as on the GBA).
+  - **Levels:** SETADSR (op 14, the root's second table: {attack, decay, sustain level, release} per
+    frame on a 0..0xFF00 level, flag = hold through key-off) and ENVELOPE (op 21, a fade; it matches
+    the WAIT after it, e.g. 0xFF00 / 0x839 = 31). Volume = (level top byte + 1) x (vol x 2 + 1), then
+    an equal-power pan (0.707 a side at the centre); its mixer is ours at volShift 0 (was 1).
+    SOUNDCNT_H = 0x9A0D: PSG at 50 % (ours was 100 %; now set at MusyX's start, back at stop; pcplay's
+    psgemu reads the bits). Together the PSG had been ~9 dB too strong against the samples.
+  - **Key-off only marks the voice** (WAIT/LOOP flag 1 see it for good; an ADSR releases unless held;
+    a trap is taken). **END stops the macro but the sample plays on, frozen**, and that voice is the
+    first a new note takes. So "fade; WAIT[01 n]; STOP" releases are cut at key-off on the GBA (the
+    WAIT sees the old key-off): reproduced as is. op 5 is STOP (flag: once a fade is silent).
+  - **Op 29 is KEYMAP, not PLAYMACRO**: plays entry note + offset and THE MACRO CARRIES ON (Lady
+    Sia's strings got their SETVOLUME 0x40 and 19-frame release back). Entry byte 4 = pan offset,
+    byte 6 = unpitched (the transpose ignored; plays at the sample's rate = the mixing rate, 11397 Hz
+    on Lady Sia and Beckham). Outside the map: nothing. **Op 30 is PLAYMACRO** (another voice).
+  - Also corrected: the splits jump when note/velocity/random >= the byte (were inverted), and may
+    cross macros like GOTO (Spider-Man 70 -> 114's layers); SETNOTE/ADDNOTE take a u16 Q8 pitch (low
+    byte a fraction, not cents); SCALEVOLUME's add is signed; op 6 is a timed loop (0 = none, 65535
+    for ever, flags as WAIT). New: 7 pan, 10 vibrato, 11 pitch sweeps, 12 slide, 18 sample range,
+    22 RNDNOTE, 34 KEYOFF (255 self, 0-3 a channel; the driver's +2 after a self-trap kept), 45
+    auto-pan, 47 per the driver. No-ops here: 31 38 40 41 42 43 52. Still skipped: 19 (wavetable
+    scan, HP once), 26/28 (portamento), 50 (R2R2), 51.
+  - Loops count on the song's first track (was track 0 only; `ms_song_shape` likewise).
+  - A wave-channel key-on before any waveform stays silent (it loaded from address 0: a pcplay FATAL
+    on HP CoS under fuzz, in the old engine too).
+  - Test suite rewritten for frames (make_demo.py's song moved to track 4; its macro waits for key-off
+    then STOPs). The scratchpad harness `mxdbg/mxlive.c` runs a song in real time and logs voices.
+  - **HARDWARE CHECKS ASKED FOR (2026-11-06):** Lady Sia and Beckham against the games themselves
+    (balance of Game Boy parts to samples, note lengths and releases, drum kits, the strings).
 - **More dumps (same folder):** Lady Sia (MusyX, 12 songs; sample starts identical before and after
   the starting-program fix, so that fix leaves it unchanged), Go! Go! Beckham (MusyX, 29), Finding
   Nemo (GAX 3, 14 songs; CAL `OLD02`: the old validator kept exactly the two the trial found),

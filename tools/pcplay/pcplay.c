@@ -184,6 +184,7 @@ int main(int argc, char **argv)
     }
 
     if (!rom_init()) { fprintf(stderr, "no cartridge header (0x96 at 0xB2)\n"); return 1; }
+    g_hostIo[0x82] = 0x0E;               // SOUNDCNT_H as audio_init() leaves it: PSG and both FIFOs at 100%
     s_strict = 1;
     s_psg = !flag(argc, argv, "--no-psg");
     scan_run(NULL, flag(argc, argv, "--full"));

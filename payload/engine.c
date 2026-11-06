@@ -84,7 +84,7 @@ void tr_stop(void)
 }
 
 int  tr_running(void) { return CORE->running(); }
-void tr_frame(void) {}
+void tr_frame(void) { if (CORE->frame && CORE->running()) CORE->frame(); }
 void tr_reroll(void) { eng_chaos_reroll(); }
 uint32_t tr_tempo_i(void) { return CORE->tempo_i(); }
 

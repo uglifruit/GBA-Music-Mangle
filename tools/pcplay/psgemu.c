@@ -60,6 +60,8 @@ void psg_emu_render(int16_t *lr, unsigned n)
     }
     unsigned nr51 = R8(0x81), master = R8(0x80);
     int volL = (master >> 4) & 7, volR = master & 7;
+    // SOUNDCNT_H bits 0-1: the PSG's share of the mix, 25 / 50 / 100 % (MP2K plays at 100, MusyX at 50)
+    unsigned ratio = R8(0x82) & 3u, shift = ratio >= 2 ? 0 : ratio == 1 ? 1 : 2;
     static const int kWaveShift[4] = { 4, 0, 1, 2 };
     for (unsigned i = 0; i < n; i++) {
         if (++s_envClock >= AUDIO_RATE / 64) {                 // the 64 Hz envelope clock
@@ -106,9 +108,10 @@ void psg_emu_render(int16_t *lr, unsigned n)
             if (nr51 & (0x10u << ch)) l += amp;
             if (nr51 & (0x01u << ch)) r += amp;
         }
-        // A channel at volume 15 and master 7 is about a quarter of full scale (15 x 512 of 32768).
-        int ol = lr[i * 2] + l * (volL + 1) * 64;
-        int or_ = lr[i * 2 + 1] + r * (volR + 1) * 64;
+        // A channel at volume 15, master 7 and a 100 % share is about a quarter of full scale (15 x 512
+        // of 32768).
+        int ol = lr[i * 2] + ((l * (volL + 1) * 64) >> shift);
+        int or_ = lr[i * 2 + 1] + ((r * (volR + 1) * 64) >> shift);
         lr[i * 2]     = (int16_t)(ol > 32767 ? 32767 : ol < -32768 ? -32768 : ol);
         lr[i * 2 + 1] = (int16_t)(or_ > 32767 ? 32767 : or_ < -32768 ? -32768 : or_);
     }

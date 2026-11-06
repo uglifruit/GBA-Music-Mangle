@@ -28,17 +28,19 @@ extern "C" {
 #define MS_WHY_SAMPLE 4u
 #define MS_WHY_MACRO 8u
 
-// The Game Boy channels (PSG): 0, 1 squares, 2 wave, 3 noise. MusyX on the GBA drives them from
-// macros (VOICE_ON / SETNOISE / HARDENVELOPE, a wave sample started on voice 2). The player keeps their
-// state here; the caller writes the registers (payload/eng_musyx.c) or emulates them (pcplay).
+// The Game Boy channels (PSG): 0, 1 squares, 2 wave, 3 noise. The driver gives every note on tracks
+// 0-3 a channel (the track's, or the macro header's when that is 0-3), and every note on 4-15 a PCM
+// voice. The player keeps their state here; the caller writes the registers (payload/eng_musyx.c) or
+// emulates them (pcplay).
 #define MS_PSG 4
+#define MS_ALL (MS_VOICES+MS_PSG) // the voice array: the PCM voices, then one per Game Boy channel
 typedef struct {
     int32_t pitch;        // Q8 semitones (MIDI key x 256), mods included
     uint32_t wave;        // wave channel: the waveform to load (a bus address), wave_len bytes
     uint8_t wave_len;     // 16 (32 4-bit steps, one bank) or 32 (64 steps, both banks)
-    uint8_t on,trigger;   // trigger: restart the channel (a new note, or a volume / envelope change)
+    uint8_t on,trigger;   // trigger: restart the channel (a key-on, or a volume / envelope change)
     uint8_t duty,env,noise,volume; // duty 0..3; env NRx2 low nibble (0 = none); noise NR43 or 255 (by pitch); volume 0..127
-    uint8_t track;
+    uint8_t track,pan;    // pan 0..127: 0-41 left, 42-85 both, 86+ right (the hardware's three places)
 } MsPsg;
 
 typedef EngRom MsRom;
@@ -56,23 +58,34 @@ typedef struct {
     uint32_t entries,seq,base_time,entry_time,message,message_time;
     uint32_t notes;uint8_t program,note,gate,activity,ended,pattern_active;
 } MsTrack;
+// A voice, as the cart's own driver keeps one (its macros, envelopes and pitch modulators run once a
+// video frame, ms_frame(); notes start and end on the sequencer's tick, ms_tick()).
 typedef struct {
     MsPcm pcm;
-    uint32_t macro_begin,macro_end,ip,keyoff,wait,gate_left,age,sample_rate;
-    int32_t pitch;uint16_t macro_id,root_note;
-    int16_t key_add;   // PLAYMACRO key offsets so far: a keymap reached through them is indexed by note + key_add
-    uint32_t loop_at,wave; // the counted loop (op 6) in progress; a wave sample's data
-    uint8_t hw,psg,duty,env,noise,loop_left,wave_len; // header voice (255 any); PSG channel + 1 held; its settings
-    uint8_t owner,note,velocity,volume,active,released,has_sample,tail,chains;
+    uint32_t macro_begin,macro_end,ip,keyoff,gate_left,age,sample_rate,wave,adsr;
+    int32_t pitch,fade;   // the pitch sounding (Q8 semitones, all parts summed); op 21's level step a frame
+    int16_t offset;       // SETNOTE / ADDNOTE / RNDNOTE / keymap transpose: Q8 semitones from the note
+    int16_t sweep[2][3];  // op 11's two sweeps: sum, step a frame, limit (the sum wraps by the limit)
+    int16_t vib[2];       // op 10's vibrato: sum, step a frame (negated every vib_period + 1 frames)
+    int16_t slide[3];     // op 12's slide: sum, step a frame, target
+    int16_t autopan[2];   // op 45's pan sweep: position (pan x 256), step a frame; bounds autopan_lo/hi x 256
+    uint16_t level;       // the envelope, 0..0xFF00 (full); scales the volume
+    uint16_t wait,repeat; // WAIT's frames left; op 6's passes left
+    uint16_t macro_id,root_note;
+    uint8_t env,phase,hold,rel; // env 0 none, 1 ADSR (phase 0..3), 2 fade; hold: key-off leaves the ADSR; rel: release asked
+    uint8_t hw,duty,henv,noise,wave_len,pan,prio; // header voice; PSG settings; pan 0..127; sound-list priority
+    uint8_t vib_count,vib_period,autopan_lo,autopan_hi,autopan_bounce;
+    uint8_t owner,note,velocity,cur,volume; // velocity as played; cur, the volume SCALEVOLUME scales; volume, what sounds
+    uint8_t active,keyed,has_sample,ended,fixed,sounding,chains,fresh; // keyed: key-off happened; ended: END ran; fixed: unpitched; fresh: first step to run
 } MsVoice;
 typedef struct {
-    MsRom rom;MsHooks hooks;MsMods mods;MsSong song;MsTrack tracks[MS_TRACKS];MsVoice voices[MS_VOICES];
-    uint32_t macros,samples,song_table,patterns,ticks,loops,rng,age;
+    MsRom rom;MsHooks hooks;MsMods mods;MsSong song;MsTrack tracks[MS_TRACKS];MsVoice voices[MS_ALL];
+    uint32_t macros,samples,song_table,patterns,ticks,loops,rng,age,tail;
     uint32_t unsupported[2],warnings,rejected,last_opcode;
     uint16_t macro_count,sample_count,song_count,bpm;
-    MsPsg psg[MS_PSG];uint8_t psg_owner[MS_PSG];   // owner: voice + 1, 0 none
+    MsPsg psg[MS_PSG];
     uint32_t macro_lo,macro_hi;                    // the region all macros' code lies in (GOTO may cross)
-    uint8_t running,error,repeat,preview,why;
+    uint8_t running,error,repeat,preview,why,toggle,lead; // toggle: the next square for an alternating macro; lead: the track loops are counted on
 } MsPlayer;
 void ms_init(MsPlayer *,MsRom,const MsHooks *);
 int ms_root_valid(const MsRom *,uint32_t root);
@@ -83,6 +96,7 @@ int ms_song_shape(const MsRom *,uint32_t root,unsigned index,uint32_t *ticks96,i
 int ms_start(MsPlayer *,const MsSong *);
 void ms_stop(MsPlayer *);
 void ms_tick(MsPlayer *); // ONE musical tick; source parser uses 96 PPQN
+void ms_frame(MsPlayer *); // one video frame (59.73 Hz): macros, envelopes, pitch modulators
 void ms_update(MsPlayer *); // live mute/pitch, no time advance
 uint32_t ms_tick_hz_q16(const MsPlayer *);
 int ms_audition_sample(MsPlayer *,uint32_t root,unsigned sample); // no sequencer/macro execution
