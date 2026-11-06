@@ -9,6 +9,13 @@ an assistant.
 
 ## What this is
 
+- **Not on the Analogue Pocket** (Andy, 2026-11-06): it can't be forced into link (multiboot) mode
+  with a cartridge inserted. FM and PSG Voice run on it (no cart); this card can't. The README says so.
+- **README.md is the user's instruction manual (rewritten 2026-11-06, Andy asked):** how to use
+  it, short, in GBA FM Voice's layout. Technical detail, CAL codes, engine notes, building and testing
+  go in **docs/MORE.md** ("Further information"), never back into the README. No test results,
+  dates or version history in either.
+
 - **The third sibling** of card 108 "GBA PSG Voice" (`uglifruit/89_GBA`, local
   `..\WorkshopGBA`) and "GBA FM Voice" (`uglifruit/GBA_FM`, local `..\WorkshopGBA-fm`). It was seeded
   from the FM tree on 2026-10-25. **Read the FM tree's CLAUDE.md for everything about the shared
@@ -239,7 +246,7 @@ an assistant.
 - **Krawall is now Krawall's own player logic, ported (2026-11-06; Andy agreed, as long as it can be
   shared freely).** `engines/krawall/krawall.c` is lib/player.c + player_effects.h re-expressed over
   bounds-checked reads, with Krawall's tables copied into `kr_tables.c`; both stay LGPL-2.1
-  (`engines/krawall/COPYING.LGPL`, notices in the files, README's Licence section: whoever hands on a
+  (`engines/krawall/COPYING.LGPL`, notices in the files, docs/MORE.md's Licence section: whoever hands on a
   UF2 must offer the source, so the repo must be public, or the source supplied, when it is shared).
   The rest of the project stays MIT. What changed in playback:
   - every Krawall effect now plays (the trial engine had no portamento, vibrato, tremolo, arpeggio
@@ -457,8 +464,7 @@ an assistant.
 
 ## Screenshots (2026-11-06)
 
-- `payload/screenshots.py` renders `docs/images/screens/screen-*.png` (the README's "The pages at a
-  glance") by running the real `build/payload.elf` under unicorn, as FM's tool does (mode 3: VRAM is
+- `payload/screenshots.py` renders `docs/images/screens/screen-*.png` (the README's pictures) by running the real `build/payload.elf` under unicorn, as FM's tool does (mode 3: VRAM is
   the framebuffer). Run it after `build.sh` whenever the UI changes (`pip install unicorn pillow`).
 - The cart is `tools/pcplay/mkdemorom.py`'s synthetic DEMO CART (an 8-track groove), NOT a game dump.
   It is mapped at 0x08000000 with open bus after it, for rom_init's size probe.
