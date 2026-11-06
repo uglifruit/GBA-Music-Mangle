@@ -26,6 +26,8 @@ verified on the PC (see "Testing"); GAX and Krawall playback are previews.
    piece of music (sound effects are listed separately; see "Song tables and sound effects").
    Nothing plays until you press **A** (or send a PLAY: Audio In 1, or the switch down).
 
+<img src="docs/images/screens/screen-scan.png" alt="The scan's result" width="360">
+
 Use an original or reproduction cartridge. Flash carts usually show their own menu at this point
 rather than a game, so they will normally report no music.
 
@@ -90,6 +92,8 @@ at power-on, so there's nothing for the Workshop to talk to.
 it is what's playing, amber while it waits (with PLAYING and the song that is, beside it). So you
 can line up the next song while this one carries on, and bring it in with PLAY.
 
+<img src="docs/images/screens/screen-play-cued.png" alt="PLAY page, a song cued" width="300"> <img src="docs/images/screens/screen-play.png" alt="PLAY page, playing" width="300">
+
 Up / Down moves the cursor through three kinds of row:
 
 | Row | Left / Right | A | B |
@@ -114,6 +118,8 @@ You don't need anything patched to mangle a song:
 
 - **Perform mode** (SELECT on the PLAY page) hands the GBA's buttons over to the **BTN** page's
   mappings. The bottom of the screen shows what each button does. The factory buttons:
+
+  <img src="docs/images/screens/screen-play-perform.png" alt="PLAY page in perform mode" width="300">
 
   | Button | Does |
   |---|---|
@@ -293,6 +299,32 @@ cart's music is. When you boot with the same cart in (same game and revision), t
 slot, loads it, and cues its song in about a second instead of scanning. If several slots were
 saved on the cart, the lowest-numbered one is used. Hold **B** while it says CHECKING SAVED SLOTS
 to scan instead, and SET > RESCAN CART always scans.
+
+## The pages at a glance
+
+START on the PLAY page opens the editor; L / R move between its pages and START goes back to PLAY.
+(The screenshots are of a synthetic test cart, rendered by running the real payload under
+emulation: `payload/screenshots.py`.)
+
+<img src="docs/images/screens/screen-map.png" alt="MAP page" width="300"> <img src="docs/images/screens/screen-btn.png" alt="BTN page" width="300">
+
+**MAP** gives each Workshop input (CV 1/2, Audio 1/2, Pulse 2, the three knobs) a destination and a
+depth, with its live level. **BTN** does the same for the GBA's eight buttons in perform mode: a
+mangle is HELD while pressed, LATCHED, or STEPPED; an action (PLAY, RESTART BAR, REROLL ...) shows
+PRESS.
+
+<img src="docs/images/screens/screen-base.png" alt="BASE page" width="300"> <img src="docs/images/screens/screen-set.png" alt="SET page" width="300">
+
+**BASE** holds every mangle's resting value, in its own units (it scrolls: there are 21). **SET**
+holds the settings: the clock in and out, Audio Out 2, the song table and list, voices, gain, which
+track the CV outputs follow, song end, the section length and when restarts happen, the switch,
+cart speed, rescan and the factory reset.
+
+<img src="docs/images/screens/screen-mem.png" alt="MEM page" width="300"> <img src="docs/images/screens/screen-cal.png" alt="CAL page" width="300">
+
+**MEM** loads and saves the Workshop's 16 patch slots (A load, B save, SELECT twice clears).
+**CAL** is the diagnostics: how the scan found the music, the link, the sound load (DSP) and the
+service load (SVC), the voices in use, and the playing engine's own report (see "Other engines").
 
 ## Building
 

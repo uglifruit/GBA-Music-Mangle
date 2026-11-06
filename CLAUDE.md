@@ -455,6 +455,20 @@ an assistant.
 - When measuring pitch by autocorrelation, take the first strong peak. Multiples of the period
   correlate as well, and an 880 Hz note was once "measured" as 293 Hz.
 
+## Screenshots (2026-11-06)
+
+- `payload/screenshots.py` renders `docs/images/screens/screen-*.png` (the README's "The pages at a
+  glance") by running the real `build/payload.elf` under unicorn, as FM's tool does (mode 3: VRAM is
+  the framebuffer). Run it after `build.sh` whenever the UI changes (`pip install unicorn pillow`).
+- The cart is `tools/pcplay/mkdemorom.py`'s synthetic DEMO CART (an 8-track groove), NOT a game dump.
+  It is mapped at 0x08000000 with open bus after it, for rom_init's size probe.
+- Differences from FM's tool:
+  - VCOUNT steps 8 lines a read, so the frame waits call `gfx_idle` (and with it `mod_update`, which
+    reads the buttons, and the clock) about 28 times a frame. FM's 0/160 toggle never runs the service
+    here.
+  - Stops at `rom_init` (to fake the host and its slot tags) and at `audio_init` (the scan's result).
+- Two help lines were found running off the screen by it (BTN, BASE) and shortened.
+
 ## Payload facts
 
 - 140.5 KB with all four engines (2026-11-06), about 21.4 s to upload (65.9 KB / 10 s with MP2K alone). IWRAM holds about 11 KB: the DMA handlers, the dispatcher,

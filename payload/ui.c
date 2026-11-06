@@ -462,7 +462,7 @@ static void btn_draw(void)
         field(i * 4 + 3, 172, y, 3, t, cur && s_col == 2 ? COL_TITLE : na ? COL_DIM : COL_MID);
         field(64 + i, 196, y, 1, (g_btn & btn_key[i]) && g_perform ? "*" : " ", COL_OK);
     }
-    field(61, 4, SCREEN_H - 30, 38, "ACTIVE IN PERFORM MODE (SELECT ON PLAY)", COL_DIM);
+    field(61, 4, SCREEN_H - 30, 38, "ACTIVE IN PERFORM (SELECT ON PLAY)", COL_DIM);
     field(62, 4, SCREEN_H - 20, 38, "HOLD/LATCH: AMT LIKE A DEPTH", COL_DIM);
     field(63, 4, SCREEN_H - 10, 38, "STEP: ADDS AMT TO THE BASE VALUE", COL_DIM);
 }
@@ -533,7 +533,7 @@ static void base_draw(void)
     // Where the window is: more above, more below.
     field(59, 214, 16, 2, s_baseTop > 0 ? "^" : "", COL_DIM);
     field(58, 214, 16 + (BASE_VISIBLE - 1) * 11, 2, s_baseTop + BASE_VISIBLE < BASE_ROWS ? "v" : "", COL_DIM);
-    field(60, 4, SCREEN_H - 10, 38, "LEFT/RIGHT 1  A+UP/DOWN 10/12  A+B ZERO", COL_DIM);
+    field(60, 4, SCREEN_H - 10, 38, "LEFT/RIGHT 1 A+UP/DOWN 10/12 A+B ZERO", COL_DIM);
 }
 
 // ---- SET --------------------------------------------------------------------------------------
