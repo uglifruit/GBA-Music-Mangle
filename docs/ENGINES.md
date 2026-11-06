@@ -5,6 +5,73 @@ and GAX are not yet. This document says what the engines share, what has to happ
 turns out to use one of them, and how the card stays one instrument with one UI whichever engine
 is playing. "As built" below records where the build differs from the design.
 
+## GBAModPlay (Logik State; added 2026-11-06)
+
+**Read from Super Puzzle Fighter II Turbo** (credit "GBAModPlay (C) Logik State 2002").
+- **Where else it is:** loveemu's lists put the driver in 46 games, among them Need for Speed
+  Underground 2 / Most Wanted / Carbon, Driv3r, Medal of Honor: Infiltrator, Stuntman, Lego Knights'
+  Kingdom, Bionicle, Asterix & Obelix XXL and Premier Manager 2004-05 / 2005-06.
+- **Files:** the player is `engines/logik/lsplay.c` (our code, MIT); the glue is
+  `payload/eng_logik.c`; engine id 4, name MODPLAY.
+
+- **Driver routines (Puzzle Fighter):**
+  - init 0x08348AFC: buffer, music bank, second bank, rate index (4 = 21024 Hz);
+  - play a module 0x08348688; module set-up 0x08348A24;
+  - row reader 0x0834902C, cell processor 0x08349ACC (row-effect jump table 0x087E6578);
+  - tick effects 0x08349848 (kind table 0x087E654C);
+  - pitch 0x08348488 (linear) and 0x08348444 (frequency), the Amiga path inline;
+  - render loop 0x08349124, ARM mixers 0x08349FB8 (music) and 0x0834A0D8 (4-bit ADPCM, effects).
+- **Module "GBAMOD30":**
+  - +0x28 channels; +0x38 orders; +0x1B1C patterns; +0x1B20 rows;
+  - +0x1B24 Amiga periods (0 = linear); +0x1B28 BPM; +0x1B2C speed;
+  - +0x1B30 the order list (256 bytes); +0x1C30 each pattern's size (u32); patterns from +0x2034.
+  - A pattern is one block per channel: {+4 volume-stream offset, +8 effect-stream offset, +0x10 the
+    next block, from +0x14}.
+  - Each block holds three run-length streams of {rows, value} pairs:
+    - note+instrument, u16 big-endian (note = v >> 7, 0x1FF none; instrument v & 127);
+    - volume column, u8 (0 none, else volume + 1);
+    - effect, u16 big-endian (effect, parameter).
+- **The sample bank is separate** and nothing in a module points at it: 256 x 12 bytes {length,
+  finetune, volume, loop start, loop length, relative note}, then the samples back to back (signed
+  8-bit). Discovery wants a bank that has every instrument the modules play: first right after a
+  module (where Puzzle Fighter's is: 0x080E4B00, 39 sounds), else within 1 MB of them.
+- **Pitch (linear mode, all Puzzle Fighter modules):** period = 7616 - (rel + note - 2) x 64 -
+  finetune / 2 + porta; frequency = T[x mod 768] x 4 >> (7 - x / 768), x = 7680 - period, T[i] =
+  16726 x 2^(i/768). That is FastTracker 2's linear table; generated, it matches the driver's 768
+  entries. Note 98 (with no instrument) shifts out to nothing: a key-off.
+  - **Amiga mode:** the period of a 1/8-semitone table, then 7093789 / (period x 2). The table is
+    generated here; ProTracker's own is hand-tuned and differs by up to 3.
+- **Level:** volume x the game's music volume (Puzzle Fighter's default 90) >> 6. The mixer adds
+  sample x level >> 8, mono, into an 8-bit buffer that wraps (we clip).
+- **Timing:** ticks/s = BPM x 2 / 5, a row every `speed` ticks. Puzzle Fighter's 24 modules are all
+  150 BPM at speed 1, so 24 rows to a beat. One driver tick is one 24-PPQN tick, as with Krawall.
+- **Effects (Puzzle Fighter uses only 1, 2 (all of them Ex/Fx fine slides), B and D):**
+  - 1/2: XM linear slides, with E/F fine on the row; Amiga slides per tick;
+  - 3 tone porta, 4 vibrato (it works in Amiga mode only: the linear path never adds it);
+  - 5/6/A volume slide; B position jump; C volume; D pattern break; E6x pattern loop; F speed/BPM;
+  - 0 arpeggio is stored but never played; 7, 8, 9 and the other Ex do nothing.
+- **Driver quirks kept:**
+  - tick effects run on channels 0-3 only;
+  - the first tick after a row sees counter 0, so it skips its volume slide;
+  - the volume column overrides the volume after the effects.
+- **Changed from the driver:**
+  - D into a row, and E6x, seek. The driver reads on in the old streams, which would play the
+    wrong rows.
+  - Tone porta in linear mode glides as XM does. The driver's never recomputes the pitch. No cart
+    seen uses it.
+- **Song kinds:** a module whose jumps lead back to an order already played loops (MUSIC); else
+  its length decides. Puzzle Fighter: 15 music, 4 jingles, 5 effects.
+- **Checks:**
+  - modtest's 8th cart is mkengines.py's lsplay.gba (226 checks);
+  - fuzz finds 0 bad reads;
+  - every other dump scans as before, and MP2K WAVs are byte-identical.
+  - Payload 159.6 KB (+15 KB).
+  - **Not heard on hardware or by ear yet.**
+- **Not supported:**
+  - the effect bank (bank 2, 4-bit ADPCM, at 0x08132C00 in Puzzle Fighter);
+  - other GBAMOD versions (only "GBAMOD30" is accepted). The 2004-06 games are driver 4.0 and may
+    differ.
+
 ## GAX 2 (feasibility 2026-11-03, implemented 2026-11-05)
 
 **Implemented:** gax.c has a V2 mode (`gx_v2_entry`, `gx_start_v2`; channel pattern tables in

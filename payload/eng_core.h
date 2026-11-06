@@ -53,11 +53,13 @@ static inline uint8_t eng_kind(uint32_t ticks24, int loops)
 }
 
 // Each engine's discovery and song list (see engine.h for the dispatch).
-extern const Engine g_engMusyx, g_engGax, g_engKrawall;
+extern const Engine g_engMusyx, g_engGax, g_engKrawall, g_engLogik;
 void mx_discover_reset(void);   void mx_discover(uint32_t b, uint32_t e);   void mx_discover_finish(void);
 void gx_discover_reset(void);   void gx_discover(uint32_t b, uint32_t e);   void gx_discover_finish(void);
 void krw_discover_reset(void);  void krw_discover(uint32_t b, uint32_t e);  void krw_discover_finish(void);
+void lsp_discover_reset(void);  void lsp_discover(uint32_t b, uint32_t e);  void lsp_discover_finish(void);
 int  mx_table_songs(const ScanResult *t, uint16_t *ix, uint8_t *kind, int max);
 int  gx_table_songs(const ScanResult *t, uint16_t *ix, uint8_t *kind, int max);
 int  krw_table_songs(const ScanResult *t, uint16_t *ix, uint8_t *kind, int max);
-int  gx_scan_note(char *t);     int  krw_scan_note(char *t);   // see eng_scan_note()
+int  lsp_table_songs(const ScanResult *t, uint16_t *ix, uint8_t *kind, int max);
+int  gx_scan_note(char *t);     int  krw_scan_note(char *t);   int lsp_scan_note(char *t); // see eng_scan_note()

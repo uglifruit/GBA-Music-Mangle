@@ -5,8 +5,9 @@
 // then on mod.c, clock.c and the UI talk to `g_eng`, never to a player directly. A cart can hold
 // more than one engine's music; each engine's songs are then their own table(s).
 //
-// The engines: MP2K (player.c, Nintendo's "Sappy"), GAX (Shin'en), Krawall (XM/S3M modules) and
-// MusyX (Factor 5), the last three from engines/ behind a shared transport (eng_core.h).
+// The engines: MP2K (player.c, Nintendo's "Sappy"), GAX (Shin'en), Krawall (XM/S3M modules), MusyX
+// (Factor 5) and GBAModPlay (Logik State), the last four from engines/ behind a shared transport
+// (eng_core.h).
 //
 // WHAT STAYS SHARED. Everything the modular and the UI touch is already engine-neutral and is not
 // in here: the link, clock.c (INT/EXT, PPQN, reset alignment), mod.c (MAP, BTN, BASE, edges, cue and
@@ -30,12 +31,13 @@
 #define ENG_ID_MUSYX    1
 #define ENG_ID_GAX      2
 #define ENG_ID_KRAWALL  3
-#define ENG_ID_COUNT    4
+#define ENG_ID_LOGIK    4                  // Logik State's GBAModPlay (eng_logik.c)
+#define ENG_ID_COUNT    5
 
 struct EngCore;
 
 typedef struct {
-    const char *name;                  // "MP2K", "MUSYX", "GAX", "KRAWALL": headers, CAL
+    const char *name;                  // "MP2K", "MUSYX", "GAX", "KRAWALL", "MODPLAY": headers, CAL
     uint8_t  id;                       // ENG_ID_*
     uint32_t unsupported;              // bit per destination (mod.h DEST_*) this engine ignores
     int      (*start)(int n);          // play song n of the current list; 0 = unplayable

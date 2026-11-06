@@ -7,6 +7,7 @@
                restart lies past its order list, with what real carts have and the first discovery
                refused: an instrument with no envelope points (count stored as 255), a sample-map
                entry with a junk high byte, a sample panned past +-64
+  lsplay.gba   a GBAModPlay module (GBAMOD30), its sample bank after it, and the driver's credit
   gax2.gba     a GAX 2 song: a song entry of four handlers (dummy, header, the channel's pattern
                table, dummy), the V2 header, a V2 instrument (one wave, envelope at +124, performance
                rows at +136), an empty sample 0 and a SIGNED sample, and "GAX Sound Engine v2.01a"
@@ -83,6 +84,54 @@ def gax2_block(rom, o):
     put32(rom, o + 0x7000, 4)
     text = b'GAX Sound Engine v2.01a (synthetic test)\0'
     rom[o + 0x6001:o + 0x6001 + len(text)] = text
+
+
+def ls_streams(cells):
+    """GBAModPlay run-length streams for one channel: cells are (note, instrument, volume, effect, param)."""
+    def runs(vals, wide):
+        out = bytearray(); i = 0
+        while i < len(vals):
+            j = i
+            while j < len(vals) and vals[j] == vals[i] and j - i < 255: j += 1
+            out.append(j - i)
+            out += struct.pack('>H', vals[i]) if wide else bytes([vals[i]])
+            i = j
+        return out
+    notes = runs([((n if n is not None else 0x1FF) << 7) | ins for n, ins, _, _, _ in cells], True)
+    vols = runs([v for _, _, v, _, _ in cells], False)
+    fx = runs([(e << 8) | prm for _, _, _, e, prm in cells], True)
+    body = notes + vols + fx
+    while len(body) % 4: body.append(0)
+    blk = bytearray(0x14)
+    struct.pack_into('<IIIII', blk, 0, 0, len(notes), len(notes) + len(vols), 0, len(body))
+    return blk + body
+
+
+def lsplay_block(rom, o):
+    """GBAModPlay: a GBAMOD30 module at o+0x1000 (2 channels, 2 orders of 16 rows at speed 6, the second
+    ending in B00, a loop), its sample bank right after it, and the driver's credit."""
+    m = o + 0x1000
+    rom[m:m + 8] = b'GBAMOD30'
+    put32(rom, m + 0x28, 2); put32(rom, m + 0x38, 2)
+    put32(rom, m + 0x1B1C, 2); put32(rom, m + 0x1B20, 16); put32(rom, m + 0x1B24, 0)
+    put32(rom, m + 0x1B28, 150); put32(rom, m + 0x1B2C, 6)
+    rom[m + 0x1B30] = 0; rom[m + 0x1B31] = 1
+    empty = [(None, 0, 0, 0, 0)] * 16
+    pats = []
+    for first, last_fx in ((49, (0, 0)), (61, (11, 0))):
+        ch0 = [(first, 1, 0, 0, 0)] + [(None, 0, 0, 0, 0)] * 14 + [(None, 0, 0) + last_fx]
+        ch1 = [(None, 0, 0, 0, 0)] * 4 + [(first + 7, 1, 33, 0, 0)] + [(None, 0, 0, 0, 0)] * 11
+        pats.append(ls_streams(ch0) + ls_streams(ch1))
+    a = m + 0x2034
+    for i, pdata in enumerate(pats):
+        put32(rom, m + 0x1C30 + 4 * i, len(pdata))
+        rom[a:a + len(pdata)] = pdata; a += len(pdata)
+    bank = (a + 3) & ~3                                   # the bank right after the module
+    struct.pack_into('<6H', rom, bank, 256, 0, 64, 0, 256, 0)   # instrument 1: 256 bytes, looped
+    for k in range(256):
+        rom[bank + 0xC00 + k] = ((k % 32) * 7 - 112) & 255     # a SIGNED saw
+    text = b'GBAModPlay (C) Logik State 2002 (synthetic test)\0'
+    rom[o + 0x8001:o + 0x8001 + len(text)] = text
 
 
 def kr_sample(rom, a, pan=0):
@@ -162,6 +211,10 @@ def main():
     header(rom, b'GAX TWO TEST', b'GAX2')
     gax2_block(rom, 0x1000)
     (out / 'gax2.gba').write_bytes(rom)
+    rom = bytearray(0x10000)
+    header(rom, b'MODPLAY TEST', b'LSPT')
+    lsplay_block(rom, 0x1000)
+    (out / 'lsplay.gba').write_bytes(rom)
     if len(sys.argv) > 2:
         rom = bytearray(pathlib.Path(sys.argv[2]).read_bytes())
         o = 0xC0000

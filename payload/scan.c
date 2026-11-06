@@ -37,6 +37,8 @@ static const Sniff kSniff[] = {                     // in order of preference fo
     { "Krawall",            7, ENG_KRAWALL, 0 },
     { "$Id: player.c,v ",  16, ENG_KRAWALL, " seb " },
     { "Extended Module: ", 17, ENG_XM,      0 },
+    { "GBAModPlay",        10, ENG_LOGIK,   0 },
+    { "GBAMOD30",           8, ENG_LOGIK,   0 },
 };
 #define SNIFF_RUN 80                                // how far a `needs` is looked for
 #define SNIFF_N ((int)(sizeof(kSniff) / sizeof(kSniff[0])))
@@ -497,17 +499,19 @@ int scan_run(ScanProgressFn progress, int full)
     // without a signature table, and MusyX (which leaves no text) only if nothing turns up, and
     // neither when the cart names GAX or Krawall (it uses that engine: since 2026-11-03, to save two
     // whole passes on such carts). FULL runs every pass.
-    int named = (g_engines & (ENG_GAX | ENG_KRAWALL)) != 0;
+    int named = (g_engines & (ENG_GAX | ENG_KRAWALL | ENG_LOGIK)) != 0;
     int heur = !mp2k && (full || !named);
     int gax  = full || (g_engines & ENG_GAX);
     int krw  = full || (g_engines & ENG_KRAWALL);
+    int lsp  = full || (g_engines & ENG_LOGIK);
     int msx  = full || !named;                          // MusyX may run: counted until we know
-    int passes = heur + gax + krw + msx;
-    static const uint8_t span[5] = { 128, 128, 64, 42, 32 };
+    int passes = heur + gax + krw + lsp + msx;
+    static const uint8_t span[6] = { 128, 128, 64, 42, 32, 25 };
     uint32_t base = 128, each = span[passes];
     if (heur) { prog_pass(base, each); find_heuristic(); drop_empty(); base += each; }
     if (gax)  { prog_pass(base, each); engine_pass(ENG_ID_GAX); drop_empty(); base += each; }
     if (krw)  { prog_pass(base, each); engine_pass(ENG_ID_KRAWALL); drop_empty(); base += each; }
+    if (lsp)  { prog_pass(base, each); engine_pass(ENG_ID_LOGIK); drop_empty(); base += each; }
     if (full || (msx && g_tableCount == 0)) { prog_pass(base, each); engine_pass(ENG_ID_MUSYX); drop_empty(); }
     if (progress) progress(256);
     note_engines();
@@ -533,7 +537,7 @@ int scan_install(int n, const uint32_t *addr, const uint16_t *rate, const uint8_
         // GAX and Krawall keep their song lists in their own discovery (scattered headers; modules
         // and their banks): a saved table of theirs runs that one pass again, still far less than
         // the whole scan.
-        if (e == ENG_ID_GAX || e == ENG_ID_KRAWALL) { rerun |= (uint8_t)(1u << e); continue; }
+        if (e == ENG_ID_GAX || e == ENG_ID_KRAWALL || e == ENG_ID_LOGIK) { rerun |= (uint8_t)(1u << e); continue; }
         if ((a & 3) || !rom_ok(a, SONG_ENTRY_SIZE)) continue;
         ScanResult *t = &g_tables[g_tableCount++];
         t->method       = SCAN_SAVED;
@@ -546,6 +550,7 @@ int scan_install(int n, const uint32_t *addr, const uint16_t *rate, const uint8_
     }
     if (rerun & (1u << ENG_ID_GAX))     { sniff_pass(); engine_pass(ENG_ID_GAX); }
     if (rerun & (1u << ENG_ID_KRAWALL)) engine_pass(ENG_ID_KRAWALL);
+    if (rerun & (1u << ENG_ID_LOGIK))   engine_pass(ENG_ID_LOGIK);
     for (int i = 0; i < g_tableCount; i++) g_tables[i].method = SCAN_SAVED;
     if (drop_empty() == 0) {
         reset_tables();

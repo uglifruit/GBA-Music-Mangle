@@ -928,6 +928,7 @@ static void engine_line(char *t)
     a = put_str(t, a, "ENGINE:");
     if (g_engines & ENG_GAX)     a = put_str(t, a, " GAX");
     if (g_engines & ENG_KRAWALL) a = put_str(t, a, " KRAWALL");
+    if (g_engines & ENG_LOGIK)   a = put_str(t, a, " GBAMODPLAY");
     if (g_engines & ENG_XM) {
         a = put_str(t, a, " XM x");
         put_dec(t, a, g_xmCount, 1);

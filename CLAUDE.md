@@ -220,6 +220,14 @@ an assistant.
     - MusyX discovery now keeps a root only if one of its first 8 songs plays a note within 2048 ticks:
       `sends_notes()` in eng_musyx.c, a hookless dry run on `s_ms`.
     - All eleven real MusyX carts still pass, including Harry Potter's Game Boy-only songs.
+- **GBAModPlay is the fifth engine (2026-11-06): docs/ENGINES.md "GBAModPlay".**
+  - Files: `engines/logik/lsplay.c` (our code, written from Puzzle Fighter's driver),
+    `payload/eng_logik.c`, `ENG_ID_LOGIK` 4, `ENG_LOGIK` sniff bit (text "GBAModPlay" or "GBAMOD30").
+  - **Discovery:** modules by their magic; the sample bank by its structure, checked against every
+    instrument the modules use (none of the modules points at it).
+  - **Clock:** one driver tick per 24-PPQN tick.
+  - **Tests:** modtest's 8th cart is `eng/lsplay.gba` (226 checks).
+  - **Not heard yet.** Puzzle Fighter lists 19 songs on MUSIC.
 - **Lemony Snicket's Krawall has no "Krawall" text**, only `$Id: player.c,v 1.4 2003/03/19 23:12:15
   seb Exp`. The sniff now takes `$Id: player.c,v ` when " seb " follows (`Sniff.needs`). Its 20
   modules are all 2003-format, sample-based (226-sample bank, unsigned, centred on 128).

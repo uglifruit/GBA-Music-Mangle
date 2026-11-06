@@ -198,8 +198,8 @@ int main(int argc, char **argv)
            g_romCode, g_romSize >> 10, meth[g_scan.method], eng_by_id(g_scan.engine)->name, g_tableIx + 1u,
            g_tableCount, g_scan.songTable, list[g_listMode % 3], g_songCount, g_scan.gameRate);
     if (g_scan.method == SCAN_NONE) {
-        printf("engine %s%s%s", g_engines ? "" : "unknown (no signature)", (g_engines & ENG_GAX) ? "GAX " : "",
-               (g_engines & ENG_KRAWALL) ? "KRAWALL " : "");
+        printf("engine %s%s%s%s", g_engines ? "" : "unknown (no signature)", (g_engines & ENG_GAX) ? "GAX " : "",
+               (g_engines & ENG_KRAWALL) ? "KRAWALL " : "", (g_engines & ENG_LOGIK) ? "GBAMODPLAY " : "");
         if (g_engines & ENG_XM) printf("XM x%u", g_xmCount);
         printf("\ninfo   %s\n", g_engineInfo);
         char note[48];

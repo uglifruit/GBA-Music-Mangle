@@ -785,6 +785,26 @@ int main(int argc, char **argv)
         CHECK(scan_install(1, addr, rate, gx) == 1 && g_scan.engine == ENG_ID_GAX && g_songCount == songs,
               "GAX 2 table from a saved slot: %u songs (want %d)", g_songCount, songs);
     }
+    if (argc > 8) {                                   // GBAModPlay (2026-11-06): mkengines.py's lsplay.gba
+        engine_checks(argv[8], ENG_ID_LOGIK);
+        CHECK(g_songCount == 1 && g_songKind[0] == KIND_MUSIC, "GBAModPlay: one module, music (it loops by B00): %u, kind %u",
+              g_songCount, g_songKind[0]);
+        play(0);
+        int ch = sounding();
+        CHECK(ch >= 0 && !(g_mix[ch].flags & MIX_F_UNSIGNED) && g_mix[ch].volL == 90,
+              "GBAModPlay samples mix signed, volume 64 at the game's music volume (channel %d, vol %u)", ch,
+              ch >= 0 ? g_mix[ch].volL : 0);
+        uint32_t loops = g_plLoops;
+        for (int i = 0; i < 200; i++) g_eng->tick();
+        CHECK((uint32_t)(g_plLoops - loops) == 1, "GBAModPlay loops by its position jump (+%u in 200 ticks)",
+              (unsigned)(g_plLoops - loops));
+        g_eng->stop();
+        uint32_t addr[1] = { g_scan.songTable };
+        uint16_t rate[1] = { 0 };
+        uint8_t ls[1] = { ENG_ID_LOGIK };
+        CHECK(scan_install(1, addr, rate, ls) == 1 && g_scan.engine == ENG_ID_LOGIK && g_songCount == 1,
+              "GBAModPlay table from a saved slot: %u songs", g_songCount);
+    }
 
     printf("modtest: %d passed, %d failed  (Patch is %u bytes)\n", s_pass, s_fail, (unsigned)sizeof(Patch));
     return s_fail ? 1 : 0;

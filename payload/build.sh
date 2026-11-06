@@ -68,7 +68,7 @@ for src in *.c; do
 done
 # The other sound engines, behind engine.c (see engine.h). Listed, not globbed: engines/ also
 # holds each engine's host tools, tests and trial mains, which must never be linked in.
-for src in ../engines/musyx/musyx.c ../engines/gax/gax.c ../engines/krawall/krawall.c ../engines/krawall/kr_tables.c ../engines/krawall/discovery.c ../engines/common/eng_mixer.c ../engines/common/eng_chaos.c; do
+for src in ../engines/musyx/musyx.c ../engines/gax/gax.c ../engines/krawall/krawall.c ../engines/krawall/kr_tables.c ../engines/krawall/discovery.c ../engines/logik/lsplay.c ../engines/common/eng_mixer.c ../engines/common/eng_chaos.c; do
     obj="build/ext_$(basename "${src%.c}").o"
     "$gcc_bin" $ARCH $CFLAGS -c "$src" -o "$obj"
     OBJS="$OBJS $obj"

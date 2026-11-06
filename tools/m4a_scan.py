@@ -51,6 +51,8 @@ SNIFF = [
     (b'Krawall', 'KRAWALL', None),
     (b'$Id: player.c,v ', 'KRAWALL', b' seb '),
     (b'Extended Module: ', 'XM', None),
+    (b'GBAModPlay', 'GBAMODPLAY', None),
+    (b'GBAMOD30', 'GBAMODPLAY', None),
 ]
 SNIFF_RUN = 80
 ENGINE_INFO_LEN = 38
@@ -384,20 +386,20 @@ def main():
     add_tables([('SIGNATURE', s, t) for s, t in find_signatures(rom)], tables)
     sniff_all(rom, sniff)
     kept = drop_empty(tables)
-    named = any(e in sniff.engines for e in ('GAX', 'KRAWALL'))
+    named = any(e in sniff.engines for e in ('GAX', 'KRAWALL', 'GBAMODPLAY'))
     if not kept and (args.full or not named):
         tables = []
         add_tables([('HEURISTIC', 0, t) for t in find_heuristic(rom)], tables)
         kept = drop_empty(tables)
     if kept and sniff.engines:
         names = ' '.join(f'XM x{sniff.xm}' if e == 'XM' else e
-                         for e in sorted(sniff.engines, key=['GAX', 'KRAWALL', 'XM'].index))
+                         for e in sorted(sniff.engines, key=['GAX', 'KRAWALL', 'XM', 'GBAMODPLAY'].index))
         print(f'also       {names} text in the cart ({sniff.info}): the GBA looks for its songs too')
     if not kept:
         print('method     NONE - no MP2K song table found')
         if sniff.engines:
             names = ' '.join(f'XM x{sniff.xm}' if e == 'XM' else e
-                             for e in sorted(sniff.engines, key=['GAX', 'KRAWALL', 'XM'].index))
+                             for e in sorted(sniff.engines, key=['GAX', 'KRAWALL', 'XM', 'GBAMODPLAY'].index))
             print(f'engine     {names}')
             print(f'info       {sniff.info}')
         else:

@@ -3,9 +3,9 @@
 A card for the Music Thing Modular **Workshop Computer**. It boots a Game Boy Advance over the link
 cable while a game cartridge stays inserted. The GBA finds the game's own music, and plays it so your
 modular can drive it: clock it, restart it, loop its bars, strip its tracks back, transpose it, and
-mangle its instruments, samples and envelopes, up to per-note CHAOS. It plays four of the GBA's
+mangle its instruments, samples and envelopes, up to per-note CHAOS. It plays five of the GBA's
 sound engines: Nintendo's MP2K ("Sappy"), which most GBA games use, and (as previews) Shin'en's
-GAX, the Krawall tracker and Factor 5's MusyX.
+GAX, the Krawall tracker, Factor 5's MusyX and Logik State's GBAModPlay.
 
 Siblings: [89_GBA](https://github.com/uglifruit/89_GBA) (GBA PSG Voice) and
 [GBA_FM](https://github.com/uglifruit/GBA_FM) (GBA FM Voice). All three use the same cable and
@@ -32,9 +32,10 @@ rather than a game, so they will normally report no music.
 ### Other engines
 
 Not every game uses Nintendo's engine, and a cart can use more than one. The scan always looks for
-MP2K. It looks for **GAX** and **Krawall** when their names are written in the cart (GAX's always
-is; Krawall's is its name or its author's signature in the player's source line), and for **MusyX**
-(which leaves no name) when nothing else turns up. A cart that names GAX or Krawall skips the
+MP2K. It looks for **GAX**, **Krawall** and **GBAModPlay** when their names are written in the cart
+(GAX's always is; Krawall's is its name or its author's signature in the player's source line;
+GBAModPlay's is its credit or its modules' "GBAMOD30" mark), and for **MusyX** (which leaves no
+name) when nothing else turns up. A cart that names GAX, Krawall or GBAModPlay skips the
 MP2K backup search and MusyX, so its scan is quicker. Each engine's songs are a SONG TABLE of
 their own, so a cart with MP2K and GAX shows two; the result screen lists the engines found ("MP2K
 + GAX"), and the PLAY page shows the engine beside the song number. SET > RESCAN CART can be
@@ -45,20 +46,21 @@ on its own, and plays until the next one would begin, then loops (or stops, as a
 
 Everything works the same on every engine: cue and PLAY, the clock and clock out, REPEAT BAR, AT
 BAR END, transpose, fine pitch, tempo, mutes, layers, solo, voice shift, table offset, sample
-start/end, reverse/drop, scrub, crush, reverb and **CHAOS** (on GAX, Krawall and MusyX: interval
+start/end, reverse/drop, scrub, crush, reverb and **CHAOS** (on GAX, Krawall, MusyX and GBAModPlay: interval
 jumps, hard pans, reverse, random starts, accents and, above half, raw cart data, as a pattern that
 repeats each loop). MP2K's own envelopes, note length and LFO have no equivalent on the others: on
-the MAP, BTN and BASE pages those destinations are dimmed and marked N/A, and do nothing. On GAX and
-Krawall, RESTART BAR and RESTART LOOP cut the sounding notes at the jump; MusyX's RESTART LOOP
-restarts the song.
+the MAP, BTN and BASE pages those destinations are dimmed and marked N/A, and do nothing. On GAX,
+Krawall and GBAModPlay, RESTART BAR cuts the sounding notes at the jump, and so does GAX's and
+Krawall's RESTART LOOP; MusyX's and GBAModPlay's RESTART LOOP restart the song.
 
-GAX, Krawall and MusyX playback are previews: some songs may be incomplete or wrong. The CAL page's
+GAX, Krawall, MusyX and GBAModPlay playback are previews: some songs may be incomplete or wrong. The CAL page's
 engine row gives each engine's own diagnostics; note it when reporting a song:
 
 | Engine | CAL row | Means |
 |---|---|---|
 | GAX | `S` songs, `OLD` how many the first, stricter scan would have kept, `FX` effect banks, then the check that turned away the most near-misses (`SHP` shape, `NOT` notes, `INS` instruments, `SMP` samples, `CHN` channels) | Tells a cart with few songs found where the rest went. A GAX 2 cart (2001-02: Tang Tang, Tony Hawk's Pro Skater 3, Bruce Lee ...) shows `V2` and its song count instead. A `U` group at the end (`U` pattern effects, perf-list effects, features: 1 ping-pong, 2 wave modulation) lists what a song asked for that the player skipped; since 2026-11-06 the GAX 2 carts above show none |
 | Krawall | `M` modules, `S`/`I` the sample and instrument banks found, unknown effects, error | Two more rows choose its **sample and instrument banks**: Krawall stores them apart from the songs, and the scan takes the largest of each. UP/DOWN picks the row, LEFT/RIGHT steps through the other candidates; the choice is saved with the patch |
+| GBAModPlay | `M` modules, `S` the sample bank's instruments, `U` effects skipped, error | Logik State's driver (Super Puzzle Fighter II Turbo; Need for Speed, Driv3r, Medal of Honor: Infiltrator, Lego Bionicle and others use it too). Added 2026-11-06 from a reading of Puzzle Fighter's driver; not heard on hardware yet |
 | MusyX | unknown commands, `W` warnings (08: all voices busy, a note took the oldest; 20: a note fell outside its drum kit and played nothing), `R` why notes were turned away (2 no such instrument, 4 bad sample, 8 bad macro or keymap), error | Since 2026-11-06 MusyX plays as the game's own sound driver does (read from the carts): its envelopes, note lengths, Game Boy channel parts and mix |
 
 ### "No music found that it can play"
@@ -70,6 +72,7 @@ When no engine's songs are found, the scan says what the cart uses instead, and 
 | ENGINE: GAX | Shin'en's GAX engine, used by many Western third-party games. The line below gives its version. |
 | ENGINE: KRAWALL | The Krawall tracker engine (XM/S3M modules), common in European games. |
 | ENGINE: XM x*n* | *n* whole FastTracker 2 modules stored in the cart, with the first one's name. |
+| ENGINE: GBAMODPLAY | Logik State's driver. "NO SAMPLE BANK" below it: its modules were found, but not the samples they play. |
 | ENGINE UNKNOWN | No known signature: an in-house engine, or one that leaves no text behind. |
 
 A GAX or Krawall name with no songs found adds a red line saying why: "GAX: NO SONGS MATCHED" (with

@@ -171,6 +171,7 @@ const Engine *eng_by_id(uint8_t id)
     case ENG_ID_MUSYX:   return &g_engMusyx;
     case ENG_ID_GAX:     return &g_engGax;
     case ENG_ID_KRAWALL: return &g_engKrawall;
+    case ENG_ID_LOGIK:   return &g_engLogik;
     default:             return &s_mp2k;
     }
 }
@@ -187,13 +188,14 @@ void eng_follow_table(void) { eng_select(g_tableCount ? g_scan.engine : ENG_ID_M
 
 // ---- discovery dispatch -------------------------------------------------------------------------
 
-void eng_discover_reset(void) { mx_discover_reset(); gx_discover_reset(); krw_discover_reset(); }
+void eng_discover_reset(void) { mx_discover_reset(); gx_discover_reset(); krw_discover_reset(); lsp_discover_reset(); }
 
 void eng_discover_slice(uint8_t id, uint32_t begin, uint32_t end)
 {
     if (id == ENG_ID_MUSYX) mx_discover(begin, end);
     else if (id == ENG_ID_GAX) gx_discover(begin, end);
     else if (id == ENG_ID_KRAWALL) krw_discover(begin, end);
+    else if (id == ENG_ID_LOGIK) lsp_discover(begin, end);
 }
 
 void eng_discover_finish(uint8_t id)
@@ -201,6 +203,7 @@ void eng_discover_finish(uint8_t id)
     if (id == ENG_ID_MUSYX) mx_discover_finish();
     else if (id == ENG_ID_GAX) gx_discover_finish();
     else if (id == ENG_ID_KRAWALL) krw_discover_finish();
+    else if (id == ENG_ID_LOGIK) lsp_discover_finish();
 }
 
 int eng_table_songs(const ScanResult *t, uint16_t *ix, uint8_t *kind, int max)
@@ -208,6 +211,7 @@ int eng_table_songs(const ScanResult *t, uint16_t *ix, uint8_t *kind, int max)
     if (t->engine == ENG_ID_MUSYX) return mx_table_songs(t, ix, kind, max);
     if (t->engine == ENG_ID_GAX) return gx_table_songs(t, ix, kind, max);
     if (t->engine == ENG_ID_KRAWALL) return krw_table_songs(t, ix, kind, max);
+    if (t->engine == ENG_ID_LOGIK) return lsp_table_songs(t, ix, kind, max);
     return 0;
 }
 
@@ -234,6 +238,7 @@ int eng_scan_note(char *t)
     t[0] = 0;
     if ((g_engines & ENG_GAX) && !has_table(ENG_ID_GAX) && gx_scan_note(t)) return 1;
     if ((g_engines & ENG_KRAWALL) && !has_table(ENG_ID_KRAWALL) && krw_scan_note(t)) return 1;
+    if ((g_engines & ENG_LOGIK) && !has_table(ENG_ID_LOGIK) && lsp_scan_note(t)) return 1;
     return 0;
 }
 

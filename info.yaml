@@ -33,7 +33,7 @@ summary: |
   software over the link cable. The GBA then searches the cartridge for the game's music (most GBA
   games use Nintendo's own MP2K "Sappy" sound engine), and plays it through its own engine, with
   the game's instruments, from the cart itself. It also plays (as previews) games on Shin'en's
-  GAX, the Krawall tracker and Factor 5's MusyX, and a cart that uses more than one engine shows
+  GAX, the Krawall tracker, Factor 5's MusyX and Logik State's GBAModPlay, and a cart that uses more than one engine shows
   each engine's songs as a table of its own. Songs, jingles and sound effects are told apart by
   what they are: an effect plays once and every trigger restarts it. Same cable as GBA PSG Voice and GBA FM Voice.<br><br>
 
