@@ -18,7 +18,7 @@ extern "C" {
 #endif
 #define LS_CHANNELS 16
 #define LS_NOLOOP UINT32_MAX
-#define LS_MAX_SAMPLE 0xFFFFu
+#define LS_MAX_SAMPLE 0x7FFFFu        // the mixer's limit (Need for Speed Carbon has a 295 KB sample)
 #define LS_EVENT_ROW 1
 #define LS_EVENT_LOOP 2
 #define LS_EVENT_STOP 3
@@ -61,6 +61,7 @@ typedef struct {
     uint16_t channels, orders, pattern_count, rows, order, row, speed, bpm, tick, counter;
     uint16_t music_volume;          // the game's music volume (Puzzle Fighter: 90, its default; Driv3r 64)
     uint8_t version;                // the module layout and driver: 1 (2002) or 2 (2003), see lsplay.c
+    uint8_t bank_format;            // the bank's entries: 1 (12 bytes) or 2 (16), see ls_bank_format
     uint16_t seek_order, seek_row;  // a jump into a pattern (break, loop), taken after the row's cells
     uint16_t pattern_notes;         // notes this pattern so far: a silent one jumping to itself is the end
     uint8_t linear, running, repeat, error, broke, seek, ended;
@@ -72,12 +73,13 @@ uint32_t ls_module_end(const LsRom *, uint32_t module); // its last pattern's la
 // A bank at a: every instrument it has fits the rules, and the samples fit the cart. used: a mask of
 // instruments (1-based, 128 bits) that must all be present; 0 skips that test. Returns the number of
 // instruments with a sample, 0 if it is not a bank.
-unsigned ls_bank_valid(const LsRom *, uint32_t a, const uint32_t *used, int version);
+unsigned ls_bank_valid(const LsRom *, uint32_t a, const uint32_t *used, int format); // format 1 or 2
+int ls_bank_format(const LsRom *, uint32_t a, const uint32_t *used, int version);  // 0, 1 or 2
 // The instruments a module plays (bit n of the 128-bit mask = instrument n). 0 if it cannot be read.
 int ls_module_instruments(const LsRom *, uint32_t module, uint32_t used[4]);
 // Its length in ticks to its end or its loop (*loops: a position jump backwards).
 int ls_module_shape(const LsRom *, uint32_t module, uint32_t *ticks, int *loops);
-int ls_start(LsPlayer *, uint32_t module, uint32_t bank);
+int ls_start(LsPlayer *, uint32_t module, uint32_t bank, int format); // format 0: ls_bank_format
 void ls_stop(LsPlayer *);
 void ls_tick(LsPlayer *);           // ONE driver tick (a row at speed 1; 24 a beat at the usual tempo)
 void ls_update(LsPlayer *);         // live mute / pitch / mods, no time

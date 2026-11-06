@@ -27,7 +27,7 @@ on its own.
 | GAX | Shin'en's engine: Finding Nemo, Tang Tang, Tony Hawk's Pro Skater 3, Spider-Man: Mysterio's Menace, Bruce Lee |
 | Krawall | Lemony Snicket, The Chronicles of Narnia, many European games |
 | MusyX | Factor 5's: Lady Sia, Denki Blocks!, BattleBots, Go! Go! Beckham!, The Incredibles, Harry Potter |
-| GBAModPlay | Logik State's: Super Puzzle Fighter II Turbo, Driv3r (and Need for Speed, Medal of Honor: Infiltrator, Lego Bionicle ...) |
+| GBAModPlay | Logik State's: Super Puzzle Fighter II Turbo, Driv3r, Need for Speed Underground 2 and Carbon (and Medal of Honor: Infiltrator, Lego Bionicle ...) |
 
 ### "No music found that it can play"
 

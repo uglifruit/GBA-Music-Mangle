@@ -30,6 +30,7 @@ static uint8_t   s_ready;
 static uint16_t  s_snapOrder, s_snapRow, s_snapTick, s_snapSpeed, s_snapBpm;
 static uint32_t  s_mods[LS_MAX_MODULES], s_bank;
 static unsigned  s_modCount, s_bankSounds;
+static uint8_t   s_bankFormat;                 // ls_bank_format's answer, given the modules' instruments
 
 static void copy_bytes(void *dst, const void *src, unsigned size)
 {
@@ -101,7 +102,7 @@ static int start(int n)
     if (i >= s_modCount || !s_bank) return 0;
     sync();
     s_ls.repeat = (uint8_t)(g_plRepeat && !g_plOnce);
-    if (!ls_start(&s_ls, s_mods[i], s_bank)) return 0;
+    if (!ls_start(&s_ls, s_mods[i], s_bank, s_bankFormat)) return 0;
     copy_bytes(&s_last, &s_ls.mods, sizeof(LsMods));
     return 1;
 }
@@ -168,7 +169,7 @@ const Engine g_engLogik = {
 
 // ---- discovery: modules by their magic, then the bank ------------------------------------------
 
-void lsp_discover_reset(void) { s_modCount = 0; s_bank = 0; s_bankSounds = 0; }
+void lsp_discover_reset(void) { s_modCount = 0; s_bank = 0; s_bankSounds = 0; s_bankFormat = 0; }
 
 // The pass's word loop, in IWRAM: "GBAM" "OD30" at a word, then the full check.
 IWRAM_CODE static void ls_words(const EngRom *r, uint32_t begin, uint32_t end)
@@ -201,22 +202,26 @@ void lsp_discover_finish(void)
     uint32_t used[4] = { 0, 0, 0, 0 }, u[4];
     for (unsigned i = 0; i < s_modCount; i++)
         if (ls_module_instruments(&r, s_mods[i], u)) for (int k = 0; k < 4; k++) used[k] |= u[k];
-    // Right after a module first (word-aligned), then every word within 1 MB of the modules.
+    // Right after a module first (word-aligned), then every word of the cart (Need for Speed
+    // Underground 2 keeps its bank 3 MB from its modules).
     uint32_t lo = s_mods[0], hi = 0;
     for (unsigned i = 0; i < s_modCount && !s_bank; i++) {
         uint32_t e = (ls_module_end(&r, s_mods[i]) + 3) & ~3u;
         if (e > hi) hi = e;
-        unsigned n = ls_bank_valid(&r, e, used, v);
-        if (n) { s_bank = e; s_bankSounds = n; }
+        int f = ls_bank_format(&r, e, used, v);
+        if (f) { s_bank = e; s_bankFormat = (uint8_t)f; s_bankSounds = ls_bank_valid(&r, e, used, f); }
     }
-    if (!s_bank) {
-        uint32_t from = lo - r.base > 0x100000 ? lo - 0x100000 : r.base;
-        uint32_t to = hi + 0x100000 < r.base + r.size - 0x1000 ? hi + 0x100000 : r.base + r.size - 0x1000;
-        for (uint32_t a = from; a < to && !s_bank; a += 4) {
-            uint32_t e0 = v == 2 ? rom_u32(a) : rom_u16(a), f = v == 2 ? a + 2 : a;   // its first instrument
-            if (!e0 || e0 > 0xFFFF || rom_u16(f + 4) > 64 || rom_u16(f + 6) + rom_u16(f + 8) > e0) continue;
-            unsigned n = ls_bank_valid(&r, a, used, v);
-            if (n) { s_bank = a; s_bankSounds = n; }
+    if (!s_bank) {                                       // from the modules' end on, then from the start
+        (void)lo;
+        uint32_t to = r.size > 0x1000 ? r.base + r.size - 0x1000 : r.base;
+        for (uint32_t k = 0, a = hi; k < (to - r.base) / 4 && !s_bank; k++, a += 4) {
+            if (a >= to) a = r.base;
+            uint32_t l1 = rom_u16(a), l2 = rom_u32(a);         // its first instrument, either format
+            int maybe1 = l1 && rom_u16(a + 4) <= 64 && rom_u16(a + 6) + rom_u16(a + 8) <= l1;
+            int maybe2 = v == 2 && l2 && l2 <= LS_MAX_SAMPLE && rom_u16(a + 6) <= 64 && rom_u16(a + 8) + rom_u16(a + 10) <= l2;
+            if (!maybe1 && !maybe2) continue;
+            int f = ls_bank_format(&r, a, used, v);
+            if (f) { s_bank = a; s_bankFormat = (uint8_t)f; s_bankSounds = ls_bank_valid(&r, a, used, f); }
         }
     }
     if (s_bank) scan_add_table(ENG_ID_LOGIK, s_mods[0]);

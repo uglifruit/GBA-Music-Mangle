@@ -105,8 +105,31 @@ order count, else 2.
 - **Driv3r:** 10 modules (1-6 channels, 102-162 BPM, speed 6-9, effects A and D), 16 sounds;
   6 music, 3 jingles, 1 effect. Fuzz finds 0 bad reads; Puzzle Fighter's renders are unchanged.
   modtest's 9th cart is mkengines.py's lsplay2.gba (244 checks).
-- **Not seen yet:** the 2004-06 games (driver 4.0 by Logik State's own page); they may need a
-  third layout.
+- **Need for Speed Underground 2 and Carbon (2026-11-06):** the same 2003 driver code, both credited
+  2003 (Underground 2 as "GBAModPlay (C) Logik State 2003", Carbon as "LS_Play"). What they added:
+  - **The bank format varies independently of the module layout:** Carbon's has 16-byte entries
+    (as Driv3r's), Underground 2's 12-byte entries (as Puzzle Fighter's) with version 2 modules.
+    - `LsPlayer.bank_format` is separate from `version`. `ls_bank_format()` tries 16 then 12 (for
+      version 2 modules), checked against the modules' instruments.
+    - Discovery passes the format it found to `ls_start()`, which would otherwise re-detect it
+      without them.
+  - **Samples can be long:** Carbon's first is 295 KB. LS_MAX_SAMPLE is now the mixer's 512 KB.
+  - **The bank can be far away:** Underground 2's is 3 MB from its modules. The fallback search runs
+    forward from the modules' end, round the whole cart.
+  - **Order count 255 with a 255-filled list (Carbon).** The first 255 now ends a version 2 order
+    list. The driver has no such check (it compares with the count, and would play on), so the
+    games must stop those songs themselves.
+  - **Song end:** version 2's driver goes round to the start at the order list's end unless the game
+    turned that off (an API call, not data). So a version 2 song that runs off its end is music.
+    Explicit endings (the silent self-jump) stay jingles and effects. This made two of Driv3r's
+    short songs music.
+  - **The layout test** checks version 2's fields first (rows, Amiga, BPM, speed at +0x13C..+0x148).
+    One Carbon module passed the version 1 test.
+  - Underground 2: 9 modules (88 sounds), all music. Carbon: 5 modules (26 sounds). Several of
+    Carbon's are one channel playing a long recorded sample. 0 bad reads, 0 skipped effects; both
+    quiet (-24 to -28 dB).
+- **Not seen yet:** the 2004-06 driver ("4.0" on Logik State's page). Underground 2 (2004) and
+  Carbon (2006) still carry the 2003 driver.
 
 ## GAX 2 (feasibility 2026-11-03, implemented 2026-11-05)
 

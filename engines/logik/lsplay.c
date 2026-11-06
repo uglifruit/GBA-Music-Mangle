@@ -166,7 +166,8 @@ typedef struct { uint32_t ch, orders, np, rows, amiga, bpm, speed, order, table,
 static int layout(const LsRom *r, uint32_t m, Layout *L)
 {
     if ((m & 3) || !ok(r, m, 0x650) || w(r, m) != 0x4D414247u || w(r, m + 4) != 0x3033444Fu) return 0;
-    if (ok(r, m, 0x2034) && w(r, m + 0x38) - 1u < 256u) {
+    int v2 = w(r, m + 0x13C) - 1u < 256u && w(r, m + 0x140) <= 1 && w(r, m + 0x144) - 32u < 224u && w(r, m + 0x148) - 1u < 31u;
+    if (!v2 && ok(r, m, 0x2034) && w(r, m + 0x38) - 1u < 256u) {
         L->v = 1; L->ch = w(r, m + 0x28); L->orders = w(r, m + 0x38); L->np = w(r, m + 0x1B1C);
         L->rows = w(r, m + 0x1B20); L->amiga = w(r, m + 0x1B24); L->bpm = w(r, m + 0x1B28);
         L->speed = w(r, m + 0x1B2C); L->order = m + 0x1B30; L->table = m + 0x1C30; L->data = m + 0x2034;
@@ -174,6 +175,10 @@ static int layout(const LsRom *r, uint32_t m, Layout *L)
         L->v = 2; L->ch = w(r, m + 0x28); L->orders = w(r, m + 0x34); L->rows = w(r, m + 0x13C);
         L->amiga = w(r, m + 0x140); L->bpm = w(r, m + 0x144); L->speed = w(r, m + 0x148);
         L->order = m + 0x14C; L->table = m + 0x24C; L->data = m + 0x650; L->np = 0;
+        // The first 255 ends the list: Need for Speed's modules store 255 orders, the rest 255s (the
+        // driver itself would play on into them; the games stop the song).
+        if (L->orders - 1u < 256u)
+            for (uint32_t i = 0; i < L->orders; ++i) if (b(r, L->order + i) == 255) { L->orders = i; break; }
         if (L->orders - 1u < 256u)
             for (uint32_t i = 0; i < L->orders; ++i) if (b(r, L->order + i) >= L->np) L->np = b(r, L->order + i) + 1u;
     }
@@ -296,7 +301,7 @@ int ls_module_instruments(const LsRom *r, uint32_t m, uint32_t used[4])
 static void inst(const LsRom *r, uint32_t e, int v, unsigned *len, unsigned *fine, unsigned *vol, unsigned *ls,
                  unsigned *ll, unsigned *rel)
 {
-    if (v == 2) { *len = w(r, e) > 0xFFFF ? 0xFFFF : w(r, e); e += 2; }
+    if (v == 2) { *len = w(r, e) > LS_MAX_SAMPLE ? LS_MAX_SAMPLE : w(r, e); e += 2; }
     else *len = h(r, e);
     *fine = h(r, e + 2); *vol = h(r, e + 4); *ls = h(r, e + 6); *ll = h(r, e + 8); *rel = h(r, e + 10);
 }
@@ -309,7 +314,7 @@ unsigned ls_bank_valid(const LsRom *r, uint32_t a, const uint32_t *used, int v)
     for (unsigned i = 0; i < 256; ++i) {
         uint32_t e = a + i * BANK_ENTRY(v);
         unsigned len, fine, vol, ls, ll, rel;
-        if (v == 2 && w(r, e) > 0xFFFF) return 0;
+        if (v == 2 && w(r, e) > LS_MAX_SAMPLE) return 0;
         inst(r, e, v, &len, &fine, &vol, &ls, &ll, &rel);
         (void)fine;
         if (!len) {
@@ -323,6 +328,14 @@ unsigned ls_bank_valid(const LsRom *r, uint32_t a, const uint32_t *used, int v)
     return n && ok(r, a + BANK_TABLE(v), total) ? n : 0;
 }
 
+// Which bank format a bank at a is: 2 (16-byte entries) or 1 (12-byte), 0 neither. Version 2
+// modules come with either (Driv3r and Carbon 16, Underground 2 12); version 1 with 12.
+int ls_bank_format(const LsRom *r, uint32_t a, const uint32_t *used, int version)
+{
+    if (version == 2 && ls_bank_valid(r, a, used, 2)) return 2;
+    return ls_bank_valid(r, a, used, 1) ? 1 : 0;
+}
+
 // The order list walked with its jumps (B, D): ticks to the end, or to an order seen before (a loop).
 int ls_module_shape(const LsRom *r, uint32_t m, uint32_t *ticks, int *loops)
 {
@@ -334,7 +347,9 @@ int ls_module_shape(const LsRom *r, uint32_t m, uint32_t *ticks, int *loops)
     for (int i = 0; i < 8; ++i) seen[i] = 0;
     unsigned order = 0, start_row = 0;
     for (unsigned guard = 0; guard < 512; ++guard) {
-        if (order >= orders) break;
+        // The end of the list: version 1's driver stops there; version 2's goes round again unless
+        // the game says not to (Need for Speed's race music runs to the end and repeats), so it loops.
+        if (order >= orders) { *loops = L.v == 2; break; }
         if (start_row == 0) {
             if ((seen[order >> 5] >> (order & 31)) & 1) { *loops = 1; break; }
             seen[order >> 5] |= 1u << (order & 31);
@@ -436,12 +451,12 @@ static uint32_t entry_of(LsPlayer *p, unsigned ins, uint32_t *data)
 {
     int i = (int)ins + p->mods.voice_shift;
     if (i < 0 || i > 255) return 0;
-    uint32_t e = p->bank + (uint32_t)i * BANK_ENTRY(p->version) + (uint32_t)(int32_t)p->mods.table_offset;
+    uint32_t e = p->bank + (uint32_t)i * BANK_ENTRY(p->bank_format) + (uint32_t)(int32_t)p->mods.table_offset;
     if (!ok(&p->rom, e, 16)) return 0;
-    uint32_t a = p->bank + BANK_TABLE(p->version);
+    uint32_t a = p->bank + BANK_TABLE(p->bank_format);
     for (int k = 0; k < i; ++k) {
-        uint32_t len = p->version == 2 ? w(&p->rom, p->bank + (uint32_t)k * 16) : h(&p->rom, p->bank + (uint32_t)k * 12);
-        a += len > 0xFFFF ? 0xFFFF : len;
+        uint32_t len = p->bank_format == 2 ? w(&p->rom, p->bank + (uint32_t)k * 16) : h(&p->rom, p->bank + (uint32_t)k * 12);
+        a += len > LS_MAX_SAMPLE ? LS_MAX_SAMPLE : len;
     }
     *data = a;
     return e;
@@ -452,7 +467,7 @@ static unsigned ins_volume(LsPlayer *p, unsigned ins)
     uint32_t d, e = entry_of(p, ins, &d);
     unsigned len, fine, vol, ls, ll, rel;
     if (!e) return 0;
-    inst(&p->rom, e, p->version, &len, &fine, &vol, &ls, &ll, &rel);
+    inst(&p->rom, e, p->bank_format, &len, &fine, &vol, &ls, &ll, &rel);
     return vol;
 }
 
@@ -467,7 +482,7 @@ static void note_on(LsPlayer *p, unsigned c, unsigned note)
     uint32_t data, e = entry_of(p, t->ins, &data);
     if (!e) return;
     unsigned len, fine, vol, ls, ll, rel;
-    inst(r, e, p->version, &len, &fine, &vol, &ls, &ll, &rel);
+    inst(r, e, p->bank_format, &len, &fine, &vol, &ls, &ll, &rel);
     t->fine = (int16_t)fine;
     t->rel = (int16_t)rel;
     t->note = (uint16_t)note;
@@ -724,14 +739,16 @@ int ls_seek(LsPlayer *p, unsigned order, unsigned row)
     return 1;
 }
 
-int ls_start(LsPlayer *p, uint32_t m, uint32_t bank)
+int ls_start(LsPlayer *p, uint32_t m, uint32_t bank, int format)
 {
     ls_stop(p);
     zero(p->tracks, sizeof(p->tracks));
     Layout L;
     int v = ls_module_valid(&p->rom, m);
-    if (!v || !layout(&p->rom, m, &L) || !ls_bank_valid(&p->rom, bank, 0, v)) return 0;
-    p->module = m; p->bank = bank; p->version = (uint8_t)v;
+    if (!v || !layout(&p->rom, m, &L)) return 0;
+    int f = format ? (ls_bank_valid(&p->rom, bank, 0, format) ? format : 0) : ls_bank_format(&p->rom, bank, 0, v);
+    if (!f) return 0;
+    p->module = m; p->bank = bank; p->version = (uint8_t)v; p->bank_format = (uint8_t)f;
     p->channels = (uint16_t)(v == 2 && L.ch > 8 ? 8 : L.ch);   // version 2's driver plays 8 at most
     p->orders = (uint16_t)L.orders;
     p->pattern_count = (uint16_t)L.np;

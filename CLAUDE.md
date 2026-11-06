@@ -239,6 +239,13 @@ an assistant.
     with different module and bank layouts and some driver changes; `LsPlayer.version`. See
     docs/ENGINES.md "Version 2".
   - **A silent pattern jumping to itself is a song's end** (Driv3r), not a loop.
+  - **The bank format (12 or 16-byte entries) is detected separately from the module version**
+    (Need for Speed Underground 2 has version 2 modules with a 12-byte bank).
+    - Discovery passes the format to `ls_start`.
+    - The bank search covers the whole cart, forward from the modules.
+    - Samples can be up to 512 KB.
+    - A 255 ends a version 2 order list.
+    - Running off the end of the list is a loop (version 2).
 - **Lemony Snicket's Krawall has no "Krawall" text**, only `$Id: player.c,v 1.4 2003/03/19 23:12:15
   seb Exp`. The sniff now takes `$Id: player.c,v ` when " seb " follows (`Sniff.needs`). Its 20
   modules are all 2003-format, sample-based (226-sample bank, unsigned, centred on 128).
