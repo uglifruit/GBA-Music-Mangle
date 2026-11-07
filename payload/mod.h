@@ -53,7 +53,7 @@ extern const char *src_name[SRC_COUNT];
 #define DEST_SONG     4    // BIP:  cue a song up to 16 either side of the chosen one; a button
                            //       STEP moves the cue itself
 #define DEST_VSHIFT   5    // BIP:  voice shift, +-64 programs
-#define DEST_TABLE    6    // BIP:  voice-table pointer offset, +-2048 bytes
+#define DEST_TABLE    6    // BIP:  voice-table offset, an entry a semitone (BASE in bytes)
 #define DEST_START    7    // POS:  sample start point, 0..255/256 of the sample
 #define DEST_SCRUB    8    // BIP:  ROM scrub, exponential, bytes .. 16 MB either way
 #define DEST_LAYERS   9    // POS:  strip tracks from the top down until only track 1 is left
@@ -169,8 +169,10 @@ extern const char *bar_len_name[BAR_LEN_COUNT];
 //       cart boots without the scan too. A v6 slot's tables are all MP2K (zeros).
 //   v8  GAX and Krawall (2026-11-01). Krawall's bank choice is APPENDED (0 = the largest), and the
 //       LIST filters mean song/effect by content now, not MP2K's music player.
+//   v9  a new MEANING: a source on TABLE OFFSET steps whole entries of the engine's table, one a
+//       semitone, not bytes. Same layout; a v8 slot keeps its depths (they now count entries).
 #define PATCH_MAGIC   0x4D50u
-#define PATCH_VERSION 8
+#define PATCH_VERSION 9
 #define PATCH_TABLES  8            // = SCAN_MAX_TABLES (mod.c asserts it)
 
 typedef struct {

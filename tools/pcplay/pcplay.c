@@ -88,6 +88,7 @@ static void check_mixer(void)
 
 typedef struct { int16_t *buf; uint32_t frames, cap; double sumSq; uint32_t peak; } Render;
 static int s_psg = 1;                // the Game Boy channels (psgemu.c); --no-psg leaves them out
+static uint32_t s_tableEnd;          // --table-secs: the block TABLE OFFSET returns to 0 (0 = never)
 
 static void render(Render *r, uint32_t blocks, int fuzz)
 {
@@ -122,6 +123,7 @@ static void render(Render *r, uint32_t blocks, int fuzz)
             if (rnd() % 3u == 0) g_eng->restart_bar();
             else if (rnd() % 5u == 0) g_eng->restart_loop();
         }
+        if (s_tableEnd && b == s_tableEnd) g_mods.tableOffset = 0;
         tickAcc += AUDIO_BLOCK * g_eng->tempo_i() * 408u;
         for (int n = 0; tickAcc >= TICK_ONE && n < 8; n++) { tickAcc -= TICK_ONE; g_eng->tick(); }
         if (tickAcc >= TICK_ONE) tickAcc = TICK_ONE - 1;
@@ -261,6 +263,7 @@ int main(int argc, char **argv)
     g_mods.lfoSpeed      = (uint8_t)argl(argc, argv, "--lfo", 22);
     g_mods.chaos         = (uint8_t)argl(argc, argv, "--chaos", 0);
 
+    s_tableEnd = (uint32_t)(argl(argc, argv, "--table-secs", 0) * AUDIO_RATE / AUDIO_BLOCK);
     double secs = (double)argl(argc, argv, "--secs", 10);
     Render r = { 0 };
     r.cap = (uint32_t)(secs * AUDIO_RATE);

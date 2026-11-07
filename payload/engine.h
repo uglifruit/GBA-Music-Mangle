@@ -65,6 +65,9 @@ void eng_follow_table(void);
 const Engine *eng_by_id(uint8_t engineId);
 // 1 if the current engine honours destination d.
 static inline int eng_supports(int d) { return d >= 32 || !((g_eng->unsupported >> d) & 1u); }
+// Bytes from one entry to the next in the table TABLE OFFSET moves through: MP2K's voicegroup 12,
+// MusyX's macros and GAX's and Krawall's instruments 4 (pointers), GBAModPlay's bank 12 or 16.
+int eng_table_step(void);
 
 // DISCOVERY, for the scan (scan.c). Before a scan, eng_discover_reset(); then each engine's pass
 // offers every 64 KB slice to eng_discover_slice(id, ...), and eng_discover_finish(id) turns what

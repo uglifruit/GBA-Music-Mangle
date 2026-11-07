@@ -63,3 +63,4 @@ int  gx_table_songs(const ScanResult *t, uint16_t *ix, uint8_t *kind, int max);
 int  krw_table_songs(const ScanResult *t, uint16_t *ix, uint8_t *kind, int max);
 int  lsp_table_songs(const ScanResult *t, uint16_t *ix, uint8_t *kind, int max);
 int  gx_scan_note(char *t);     int  krw_scan_note(char *t);   int lsp_scan_note(char *t); // see eng_scan_note()
+int  lsp_table_step(void);                                    // the bank's entry size

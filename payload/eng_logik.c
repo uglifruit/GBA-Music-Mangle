@@ -152,6 +152,8 @@ int lsp_scan_note(char *t)
     return 1;
 }
 
+int lsp_table_step(void) { return s_bankFormat == 2 ? 16 : 12; }
+
 static const EngCore s_core = {
     start, stop, running, tick, loops, snap_take, snap_restore, 0, lanes, sync, tempo_i, diag, 0,
 };

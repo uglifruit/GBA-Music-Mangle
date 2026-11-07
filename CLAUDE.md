@@ -344,7 +344,7 @@ an assistant.
 - **PERFORM mode turns off auto-repeat.** A held button is a HOLD, and a repeat would turn one STEP
   press into a stream. `modtest` checks this.
 - `tools/pcplay/modtest` drives `mod_update()` with stubbed link inputs and simulated keys
-  (`g_hostIo[0x130]`, active low). 183 checks with all the engine carts, all passing 2026-11-01. Its `play(n)` helper cues
+  (`g_hostIo[0x130]`, active low). 254 checks with all the engine carts, all passing 2026-11-07. Its `play(n)` helper cues
   and PLAYs: since v6 a select alone starts nothing. Run it after touching
   `mod.c`.
 
@@ -356,8 +356,8 @@ an assistant.
 - Transpose is 1V/oct at **depth 63**: a semitone is 1792 in v×depth units.
 - The follower drops the gate for 3 ms on a new note while the gate is high, so legato notes
   retrigger downstream envelopes.
-- **Patch magic `'MP'` (0x4D50), `PATCH_VERSION 8`** (v7 appended `tableEngine[8]`, v8 Krawall's
-  banks; 228 bytes). The FM card's rules apply: bump the version
+- **Patch magic `'MP'` (0x4D50), `PATCH_VERSION 9`** (v7 appended `tableEngine[8]`, v8 Krawall's
+  banks; v9 only TABLE OFFSET's meaning; 228 bytes). The FM card's rules apply: bump the version
   for any change of layout *or* meaning, and prefer appending + migrating. v2 APPENDED table, list,
   BASE and BTN; `mod_patch_accept()` migrates a zero-padded v1 by giving it the factory buttons.
   **v3 (2026-10-27) added ten destinations.** BASE couldn't grow in place (BTN follows it), so v2's
@@ -410,8 +410,14 @@ an assistant.
   RESTART BAR/LOOP; `g_plStarts` counts `player_start()`s. The host now caps each pulse at half
   the time since the counter's last step (min 0.5 ms), or 24 PPQN at x4 tempo merged into a held
   high. Silent while stopped. The old "beat" output was `g_plBeats` (still kept, unused by the link).
-- **BASE A+UP/DOWN steps 12 on TABLE OFFSET and TRANSPOSE** (an instrument entry, an octave), 10 on
-  the rest. **MEM: SELECT twice clears a slot** by saving 256 bytes of 0xFF: the host's
+- **TABLE OFFSET steps whole entries (patch v9, 2026-11-07, Andy asked):** a CV on it on Go Go
+  Beckham "couldn't get the sound back". The engine does restore it at 0 (measured); but the offset was
+  bytes, and only multiples of 4 play on MusyX/GAX/Krawall (most of MP2K too), so a CV resting off 0 V
+  was silence. Now the MAP/BTN part is `entries x eng_table_step()` (engine.c: MP2K 12, GBAModPlay
+  12/16 by bank format, the rest 4), one entry per semitone at depth 63, rounded as TRANSPOSE is
+  (`sum`, 1792); BASE stays in bytes. pcplay `--table-secs S` drops `--table` to 0 after S seconds.
+- **BASE A+UP/DOWN steps one table entry on TABLE OFFSET (`eng_table_step()`), 12 on TRANSPOSE** (an
+  octave), 10 on the rest. **MEM: SELECT twice clears a slot** by saving 256 bytes of 0xFF: the host's
   `slot_valid()` reads a 0xFFFF start as empty, so no firmware change was needed.
 - **An effect plays once** (`g_plOnce`, set from `g_songPlayer[n] != 0` in `start_song`): a
   backward GOTO or an endless REPT ends its track, and SONG END = REPEAT is ignored. Andy's model:

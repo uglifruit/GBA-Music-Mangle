@@ -122,6 +122,7 @@ static void engine_checks(const char *path, uint8_t engine)
     g_patch.base[DEST_TRANS] = 12; update(); g_eng->update();
     CHECK(ch >= 0 && g_mix[ch].step >= step0 * 2 - 4 && g_mix[ch].step <= step0 * 2 + 4,
           "%s transpose +12: channel %d step %u -> %u", nm, ch, step0, ch >= 0 ? g_mix[ch].step : 0);
+    CHECK(engine == ENG_ID_LOGIK || eng_table_step() == 4, "%s: TABLE OFFSET steps a pointer (%d)", nm, eng_table_step());
     CHECK(!eng_supports(DEST_ATTACK) && eng_supports(DEST_CHAOS) && eng_supports(DEST_REROLL)
           && eng_supports(DEST_TRANS) && eng_supports(DEST_RBAR),
           "%s: ADSR marked N/A; CHAOS, REROLL, transpose and RESTART BAR not", nm);
@@ -261,6 +262,22 @@ int main(int argc, char **argv)
     g_in[1] = 2048 - 2 * 341; update();
     CHECK(g_mods.pitch == -24 * 256, "CV2 -2V: pitch %d, want %d", g_mods.pitch, -24 * 256);
     neutral();
+
+    // 2a. CV on TABLE OFFSET steps whole voicegroup entries (12 bytes), one a semitone; BASE adds bytes.
+    {
+        ModSlot keep = g_patch.mod[SRC_CV1];
+        g_patch.mod[SRC_CV1].dest = DEST_TABLE; g_patch.mod[SRC_CV1].depth = 63;
+        g_in[0] = 2048 + 341; update();
+        CHECK(eng_table_step() == 12 && g_mods.tableOffset == 12 * 12, "CV1 +1V on TABLE: %d bytes, want 144",
+              g_mods.tableOffset);
+        g_in[0] = 2048 - 30; update();                    // just off 0 V: a whole entry, never between two
+        int near0 = g_mods.tableOffset;
+        g_in[0] = 2048 + 63; g_patch.base[DEST_TABLE] = 5; update();
+        CHECK(near0 == -12 && g_mods.tableOffset == 2 * 12 + 5, "TABLE: -30 counts %d (want -12), +63 counts + BASE 5: %d (want 29)",
+              near0, g_mods.tableOffset);
+        g_patch.base[DEST_TABLE] = 0; g_patch.mod[SRC_CV1] = keep;
+        neutral();
+    }
 
     // 2b. Readings just off 0 mangle nothing (an unpatched jack, a knob at noon), on either side.
     for (int o = -30; o <= 30; o += 3) {
@@ -726,7 +743,7 @@ int main(int argc, char **argv)
               "v6 -> v7: engines %u..%u, tables %u", q.tableEngine[0], q.tableEngine[7], q.tableCount);
         q.version = 7;                                    // v7 -> v8: Krawall's banks were past its end
         q.krSampleBank = 0xA5A5A5A5u; q.krInstrBank = 0x5A5A5A5Au;
-        CHECK(mod_patch_accept(&q) == 1 && q.version == 8 && q.krSampleBank == 0 && q.krInstrBank == 0,
+        CHECK(mod_patch_accept(&q) == 1 && q.version == PATCH_VERSION && q.krSampleBank == 0 && q.krInstrBank == 0,
               "v7 -> v8: Krawall banks %08X %08X, want 0 0 (the largest)", q.krSampleBank, q.krInstrBank);
         q.tableEngine[1] = 0x7F;                          // a v7 slot naming no known engine
         CHECK(mod_patch_accept(&q) == 1 && q.tableCount == 0, "an unknown engine: no tables (%u)", q.tableCount);
@@ -787,6 +804,7 @@ int main(int argc, char **argv)
     }
     if (argc > 8) {                                   // GBAModPlay (2026-11-06): mkengines.py's lsplay.gba
         engine_checks(argv[8], ENG_ID_LOGIK);
+        CHECK(eng_table_step() == 12, "GBAModPlay 2002: TABLE OFFSET steps a 12-byte instrument (%d)", eng_table_step());
         CHECK(g_songCount == 1 && g_songKind[0] == KIND_MUSIC, "GBAModPlay: one module, music (it loops by B00): %u, kind %u",
               g_songCount, g_songKind[0]);
         play(0);
@@ -808,6 +826,7 @@ int main(int argc, char **argv)
     if (argc > 9) {                                   // GBAModPlay's 2003 layout (Driv3r's): lsplay2.gba
         engine_checks(argv[9], ENG_ID_LOGIK);
         mod_set_list(0, LIST_ALL);
+        CHECK(eng_table_step() == 16, "GBAModPlay 2003: TABLE OFFSET steps a 16-byte instrument (%d)", eng_table_step());
         CHECK(g_songCount == 2 && g_songKind[0] == KIND_MUSIC && g_songKind[1] == KIND_SFX,
               "GBAModPlay 2003: a looping module (music) and one ending on a silent self-jump (an effect): %u, %u %u",
               g_songCount, g_songKind[0], g_songKind[1]);

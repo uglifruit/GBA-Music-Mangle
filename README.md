@@ -154,7 +154,7 @@ where each one rests. Most do something either side of noon:
 | Mangle | Right of noon | Left of noon |
 |---|---|---|
 | **Voice shift** | Every instrument swapped for one further along the game's set | ...further back |
-| **Table offset** | The game's instrument table read from the wrong place | |
+| **Table offset** | The game's instrument table read from further along: a different instrument for every semitone of CV | ...further back |
 | **Start / End** | Each sample starts later | Each sample's end is chopped |
 | **Layers** | Tracks stripped from the top | ...from the bottom |
 | **Solo / Mute** | One track soloed | One track muted |

@@ -237,6 +237,8 @@ int mod_patch_accept(Patch *p)
         p->krInstrBank = 0;
         p->version = 8;
     }
+    // v8 -> v9: only TABLE OFFSET's meaning changed (entries a semitone, not bytes): nothing to move.
+    if (p->version == 8) p->version = 9;
     for (int i = 0; i < PATCH_TABLES; i++) if (p->tableEngine[i] >= ENG_ID_COUNT) p->tableCount = 0;
     if (p->clkOutIx >= CLK_PPQN_COUNT) p->clkOutIx = CLK_OUT_DEFAULT;
     if (p->out2Mode >= OUT2_COUNT) p->out2Mode = OUT2_LOOP;
@@ -617,7 +619,12 @@ IWRAM_CODE void mod_update(void)
     } else {
         // Divides, not shifts: a shift floors, and -1 >> 5 is a whole program down.
         g_mods.voiceShift    = (int16_t)clampi(dv[DEST_VSHIFT] / 32 + bs[DEST_VSHIFT], -127, 127);
-        g_mods.tableOffset   = (int16_t)(dv[DEST_TABLE] + bs[DEST_TABLE]);
+        // TABLE OFFSET's CV and buttons step whole entries of the engine's table, one a semitone (1V/oct
+        // at depth 63, rounded as TRANSPOSE is): an offset between entries mostly reads nothing, so a
+        // CV resting just off 0 V silenced the song. BASE stays in bytes, for the reads in between.
+        int32_t tb = sum[DEST_TABLE];
+        int32_t ent = clampi((tb >= 0 ? tb + 896 : tb - 896) / 1792, -127, 127);
+        g_mods.tableOffset   = (int16_t)(ent * eng_table_step() + bs[DEST_TABLE]);
         // Each of these two has a second meaning below zero: START cuts the END off instead, and
         // REVERSE becomes a chance to DROP the note.
         int32_t st = clampi(dv[DEST_START] / 8 + bs[DEST_START] * 2, -255, 255);

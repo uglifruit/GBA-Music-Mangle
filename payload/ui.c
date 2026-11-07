@@ -500,7 +500,7 @@ static void base_keys(uint16_t k)
     int8_t *v = &g_patch.base[dest];
     if ((k & (KEY_A | KEY_B)) && (g_btn & (KEY_A | KEY_B)) == (KEY_A | KEY_B)) { *v = 0; return; }
     int d = (k & KEY_RIGHT) ? 1 : (k & KEY_LEFT) ? -1 : 0;
-    int big = (dest == DEST_TABLE || dest == DEST_TRANS) ? 12 : 10;
+    int big = dest == DEST_TABLE ? eng_table_step() : dest == DEST_TRANS ? 12 : 10;
     if (aHeld) d += (k & KEY_UP) ? big : (k & KEY_DOWN) ? -big : 0;
     if (d) *v = (int8_t)step_clamp(*v, d, base_min(dest), base_max(dest));
 }

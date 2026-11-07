@@ -176,6 +176,15 @@ const Engine *eng_by_id(uint8_t id)
     }
 }
 
+int eng_table_step(void)
+{
+    switch (g_eng->id) {
+    case ENG_ID_MP2K:  return 12;
+    case ENG_ID_LOGIK: return lsp_table_step();
+    default:           return 4;
+    }
+}
+
 void eng_select(uint8_t id)
 {
     const Engine *e = eng_by_id(id);

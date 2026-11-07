@@ -102,8 +102,14 @@ value. It can also fire a clock, PLAY, STOP, a reset, the next song (a cue), RES
 BAR, REROLL CHAOS or CLEAR MANGLES. A STEP on SONG moves the cue by its amount, so a button can browse
 a long list. Perform mode turns auto-repeat off: a held button is a HOLD.
 
-BASE: LEFT/RIGHT change a value by 1; hold A and UP/DOWN to change it by 12 for TABLE OFFSET (one
-instrument entry) and TRANSPOSE (an octave), 10 for everything else; A+B puts it back to zero.
+BASE: LEFT/RIGHT change a value by 1; hold A and UP/DOWN to change it by one table entry for TABLE
+OFFSET, 12 for TRANSPOSE (an octave), 10 for everything else; A+B puts it back to zero.
+
+TABLE OFFSET: a CV or button moves it a whole entry of the game's table at a time, one entry a
+semitone (1V/oct at depth 63), so every step is another instrument. BASE moves it a byte at a time,
+which reads the table between its entries: mostly silence, sometimes a strange sound. The PLAY page's
+TBL shows the offset in bytes. An entry is 12 bytes on MP2K and GBAModPlay's 2002 games (16 on its
+later ones) and 4 on MusyX, GAX and Krawall.
 
 ## Saved slots in detail
 
