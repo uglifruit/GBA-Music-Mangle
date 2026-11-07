@@ -180,12 +180,15 @@ void mod_default_patch(void)
     g_patch.clkOutIx = CLK_OUT_DEFAULT;
     g_patch.out2Mode = OUT2_LOOP;
 
+    // Depth 16 on the audio inputs: a +-5 V throw is about +-15 instruments, and a small offset
+    // stays home. CV2 at 32 is a semitone per 1/6 V (half of 1V/oct).
     static const uint8_t factory[SRC_COUNT] = {
-        DEST_VSHIFT, DEST_TRANS, DEST_PLAY, DEST_RBAR, DEST_CLOCK, DEST_CHAOS, DEST_TEMPO, DEST_SCRUB,
+        DEST_REVERB, DEST_TRANS, DEST_TABLE, DEST_VSHIFT, DEST_CLOCK, DEST_CHAOS, DEST_TEMPO, DEST_SCRUB,
     };
+    static const int8_t depth[SRC_COUNT] = { 63, 32, 16, 16, 63, 63, 63, 63 };
     for (int s = 0; s < SRC_COUNT; s++) {
         g_patch.mod[s].dest  = factory[s];
-        g_patch.mod[s].depth = 63;
+        g_patch.mod[s].depth = depth[s];
     }
     default_buttons(&g_patch);
 }

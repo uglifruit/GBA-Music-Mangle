@@ -1,6 +1,8 @@
 // cgb.c — m4a PSG envelopes and register updates; audio.c retains DMA/master ownership.
 // Ported from pret/pokeemerald src/m4a.c, CgbSound/MidiKeyToCgbFreq. The envelope values are read
 // through pl_env() (player.c), so the ADSR mangles reach notes already sounding.
+// A port of Nintendo's routines, as reconstructed by pret: NOT under this repository's MIT licence
+// (NOTICE.md).
 #include "cgb.h"
 #include "player.h"
 #include "rom.h"

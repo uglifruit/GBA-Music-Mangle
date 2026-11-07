@@ -1,6 +1,8 @@
 /*
 ComputerCard  - by Chris Johnson
 
+MIT License, Copyright (c) 2024-6 Chris Johnson. The full licence text is in NOTICE.md.
+
 version 0.3.0   -  12 May 2026
 
 ComputerCard is a header-only C++ library, providing a class that

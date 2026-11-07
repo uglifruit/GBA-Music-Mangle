@@ -1,5 +1,6 @@
 // Independent bounded decoder for GAX 3.05-style song data. No cartridge code is executed.
 // Format reference: loveemu's Gaxtapper and beanie_axolotl's MIT shinen-gax-python.
+// shinen-gax-python: MIT License, Copyright (c) 2024 beanie_axolotl (NOTICE.md). No gaxtapper code.
 #include "gax.h"
 static void zero(void *v,unsigned n){volatile uint8_t *p=v;while(n--)*p++=0;}
 static int clamp(int x,int l,int h){return x<l?l:x>h?h:x;}

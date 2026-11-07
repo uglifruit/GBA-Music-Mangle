@@ -1,15 +1,15 @@
-draft: true
+draft: false
 Name: GBA Music Mangle
 short-description: "Boots a Game Boy Advance over the pulse jacks with a game cartridge still inserted, finds the game's own music, and plays it under the modular's control: clocked, restarted, transposed and mangled"
 Language: C++ (Pico SDK + ComputerCard) + C (GBA payload)
 Creator: Andy Jenkinson (uglifruit)
-Version: 0.1.0
-Status: Beta
-License: MIT
+Version: 1.0.0
+Status: Released
+License: MIT (the Krawall player LGPL-2.1; see NOTICE.md)
 repository: https://github.com/uglifruit/GBA-Music-Mangle
 Editor: none
 date-created: 2026-10-25
-date-updated: 2026-10-29
+date-updated: 2026-11-07
 
 contact:
   social:
@@ -17,7 +17,7 @@ contact:
 
 uf2:
   - path: UF2/gba_link.uf2
-    name: GBA Music Mangle 0.1.0
+    name: GBA Music Mangle 1.0.0
 
 tags:
   - gba
@@ -37,10 +37,10 @@ summary: |
   each engine's songs as a table of its own. Songs, jingles and sound effects are told apart by
   what they are: an effect plays once and every trigger restarts it. Same cable as GBA PSG Voice and GBA FM Voice.<br><br>
 
-  CLOCK AND STRUCTURE. Choosing a song cues it; PLAY (Audio In 1, the switch down, or A) starts it,
-  so the next song can be lined up while this one plays. Pulse In 2 clocks the song (1 to 24 PPQN,
-  smoothed); unpatched, songs play at their own tempo. Audio In 2 restarts the bar (a beat-repeat
-  from a clock divider), and RESTART LOOP skips a song's intro. Restarts and PLAY can happen at once
+  CLOCK AND STRUCTURE. Choosing a song cues it; PLAY (the switch down, A, or any input mapped to it)
+  starts it, so the next song can be lined up while this one plays. Pulse In 2 clocks the song (1 to
+  24 PPQN, smoothed); unpatched, songs play at their own tempo. RESTART BAR (button A in perform mode,
+  or a clock divider on any input) is a beat-repeat, and RESTART LOOP skips a song's intro. Restarts and PLAY can happen at once
   or wait for the end of the bar. The switch held up repeats the bar playing.<br><br>
 
   SOUND EFFECTS. The game's effects are in their own list, and each one plays once per PLAY: pick
@@ -52,7 +52,9 @@ summary: |
   crush, the envelope (attack, decay, sustain, release), note length, reverb, vibrato and trill,
   tremolo and gate, and CHAOS: per-note dice for jumps, pans, instrument swaps and raw-cart
   samples, as a pattern that repeats every loop or as free chaos. Out of the box the main knob is
-  CHAOS and the GBA's buttons restart the bar, reroll the chaos, transpose and clear it all.<br><br>
+  CHAOS, the audio inputs swap the instruments (table offset and voice shift), CV 1 is reverb and
+  CV 2 transposes, and the GBA's buttons restart the bar, reroll the chaos, transpose and clear it
+  all.<br><br>
 
   THE GBA SCREEN. Play page with all sixteen tracks and every mangle live; MAP, BTN and BASE pages
   for the mappings, SET, 16 memory slots, and CAL. A saved slot remembers its cart, so the next
@@ -66,17 +68,17 @@ panel:
       name: Clock
       description: Clocks the song's sequencer at the PPQN set on the SET page (1, 2, 4, 8, 12 or 24), with the rest of each pulse's ticks spread evenly. Unpatched, songs play at their own tempo
     - id: AudioIn1
-      name: Play
-      description: A rising edge plays the cued song from its start, aligned to the clock (or at the end of the bar, if SET > RESTARTS says so). On the song already playing it is a restart. Re-assignable on the MAP page
+      name: Table offset
+      description: Reads the instruments from further along (or back down) the game's table, a whole entry at a time, up to 15 either way at +-5 V. Near 0 V the song is as written. Re-assignable on the MAP page
     - id: AudioIn2
-      name: Restart bar
-      description: A rising edge jumps back to the start of the current bar. From a clock divider it is a beat-repeat. Re-assignable on the MAP page
-    - id: CVIn1
       name: Voice shift
-      description: Swaps every instrument for one further along (or back down) the game's instrument table. Re-assignable on the MAP page
+      description: Swaps every instrument for another from the game's set, up to 13 either way at +-5 V. Near 0 V the song is as written. Re-assignable on the MAP page
+    - id: CVIn1
+      name: Reverb
+      description: Adds reverb above 0 V; below 0 V, on Nintendo's engine, takes away the song's own. Re-assignable on the MAP page
     - id: CVIn2
       name: Transpose
-      description: 1V/oct, in semitones, either side of 0 V. Re-assignable on the MAP page
+      description: In semitones either side of 0 V, 2 V an octave (MAP depth 63 makes it 1V/oct). Re-assignable on the MAP page
     - id: PulseIn1
       name: GBA SO (MISO)
       description: Serial data back from the GBA. Read directly via PIO, not the 48kHz pulse path

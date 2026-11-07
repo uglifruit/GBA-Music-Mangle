@@ -20,10 +20,10 @@
 //         effect, so an unpatched input or a centred knob never mangles anything
 //   BIP   both directions act around zero
 //
-// The factory map (performance-first, 2026-10-27):
-//   PU2  -> CLOCK          AU1 -> PLAY            AU2 -> RESTART BAR (beat-repeat from a divider)
-//   CV1  -> VOICE SHIFT    CV2 -> TRANSPOSE (1V/oct)
-//   MAIN -> CHAOS          X   -> TEMPO           Y   -> ROM SCRUB
+// The factory map (2026-11-07; depths in brackets, 63 = full):
+//   PU2  -> CLOCK          AU1 -> TABLE OFFSET (16)   AU2 -> VOICE SHIFT (16)
+//   CV1  -> REVERB         CV2 -> TRANSPOSE (32: half of 1V/oct)
+//   MAIN -> CHAOS          X   -> TEMPO               Y   -> ROM SCRUB
 // The factory buttons (PERFORM mode):
 //   A RESTART BAR   B REROLL CHAOS   L hold REVERSE   R hold CRUSH   UP/DOWN step TRANSPOSE
 //   LEFT CLEAR MANGLES   RIGHT step CHAOS (+32 each press)

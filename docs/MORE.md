@@ -76,7 +76,7 @@ first item. Pokémon Ruby has over 400 songs, and the first 250 or so are effect
 list by default.
 
 Choosing an effect: L/R, the SONG CV (up to 16 either side), or a button STEPping SONG. Firing it:
-A on the song number, Audio In 1, the switch down, or any gate or button mapped to PLAY.
+A on the song number, the switch down, or any gate or button mapped to PLAY.
 
 ## The sound destinations (MP2K)
 
@@ -87,7 +87,7 @@ A on the song number, Audio In 1, the switch down, or any gate or button mapped 
 | SUSTAIN | Up: held notes stay louder. Down: plucky. |
 | RELEASE | Up: long tails that ring over each other. Down: notes cut dead. |
 | NOTE LENGTH | Up: legato, up to ×4. Down: staccato, down to ¼. |
-| REVERB | Adds to the song's own reverb. Down removes it. |
+| REVERB | Adds to the song's own reverb. Down removes it. (On the other engines, up adds reverb.) |
 | VIBRATO | Wobbles the pitch of every track; left of noon a square wobble (a trill). |
 | TREMOLO | Wobbles the volume; left of noon a square wobble (a gate). |
 | LFO SPEED | The vibrato and tremolo rate, ×¼ to ×4 around 5 Hz. |
@@ -157,9 +157,13 @@ rules: [PLAYER_SPEC.md](PLAYER_SPEC.md).
 
 ## Licence
 
-MIT, see [LICENSE](../LICENSE), except the Krawall player: `engines/krawall/krawall.c` and
-`engines/krawall/kr_tables.c`/`.h` are ported from Sebastian Kienzl's Krawall
-([github.com/sebknzl/krawall](https://github.com/sebknzl/krawall)) and stay under the GNU Lesser General
-Public License 2.1, see [engines/krawall/COPYING.LGPL](../engines/krawall/COPYING.LGPL). The firmware and
-payload may be shared freely; whoever hands on a built UF2 must also offer the source of those files
-(this repository does), so anyone can rebuild it with their own changes.
+MIT, see [LICENSE](../LICENSE), except for the parts listed in [NOTICE.md](../NOTICE.md), which keep
+their own terms:
+- the Krawall player (LGPL-2.1);
+- ComputerCard (MIT, Chris Johnson);
+- the Pico SDK (BSD-3-Clause);
+- Nintendo's MP2K tables and Game Boy channel routines, as reconstructed by pret.
+
+The firmware may be shared freely. Whoever hands on a built UF2 must also offer the source of the
+Krawall files; this repository does, so anyone can rebuild it with their own changes. NOTICE.md
+also credits the projects whose documentation of the formats this program follows.

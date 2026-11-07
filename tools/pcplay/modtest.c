@@ -254,6 +254,28 @@ int main(int argc, char **argv)
     CHECK(g_mods.pitch == 0 && g_mods.tempoU == 0x100 && g_mods.mute == 0 && g_mods.reverseChance == 0,
           "rest: pitch %d tempo %u mute %u rev %u", g_mods.pitch, g_mods.tempoU, g_mods.mute, g_mods.reverseChance);
 
+    // 2-. The factory map (2026-11-07): CV1 REVERB, CV2 TRANSPOSE at 32, AU1 TABLE OFFSET and AU2
+    //     VOICE SHIFT at 16. +1 V on each:
+    g_in[0] = 2048 + 341; update();
+    CHECK(g_mods.reverb == 20, "factory CV1 +1V: reverb %d, want 20", g_mods.reverb);
+    g_in[0] = 2048; g_in[1] = 2048 + 341; update();
+    CHECK(g_mods.pitch == 6 * 256, "factory CV2 +1V: pitch %d, want 6 semitones", g_mods.pitch);
+    g_in[1] = 2048; g_in[2] = 2048 + 341; update();
+    CHECK(g_mods.tableOffset == 3 * 12, "factory AU1 +1V: table %d, want 3 entries (36)", g_mods.tableOffset);
+    g_in[2] = 2048; g_in[3] = 2048 + 341; update();
+    CHECK(g_mods.voiceShift == 2, "factory AU2 +1V: voice shift %d, want 2", g_mods.voiceShift);
+    g_in[3] = 2048 + 5 * 341; g_in[2] = 2048 - 5 * 341; update();
+    CHECK(g_mods.voiceShift == 13 && g_mods.tableOffset == -15 * 12,
+          "factory +-5V: voice shift %d (want 13), table %d (want -180)", g_mods.voiceShift, g_mods.tableOffset);
+    neutral();
+    // The rest of section 2 is about the sources themselves: CV1 on VOICE SHIFT and CV2 on TRANSPOSE
+    // at full depth, the audio inputs off.
+    ModSlot factoryIn[4];
+    for (int i = 0; i < 4; i++) factoryIn[i] = g_patch.mod[i];
+    g_patch.mod[SRC_CV1].dest = DEST_VSHIFT; g_patch.mod[SRC_CV1].depth = 63;
+    g_patch.mod[SRC_CV2].depth = 63;
+    g_patch.mod[SRC_AU1].dest = DEST_NONE; g_patch.mod[SRC_AU2].dest = DEST_NONE;
+
     // 2. CV1 +1 V -> voice shift ~ +10 programs; CV2 +1 V -> +12 semitones (1V/oct at depth 63).
     g_in[0] = 2048 + 341; update();
     CHECK(g_mods.voiceShift == 10, "CV1 +1V: voice shift %d, want 10", g_mods.voiceShift);
@@ -292,6 +314,7 @@ int main(int argc, char **argv)
     }
     g_in[0] = 2048 - 341; update();
     CHECK(g_mods.voiceShift == -10, "CV1 -1V: voice shift %d, want -10", g_mods.voiceShift);
+    for (int i = 0; i < 4; i++) g_patch.mod[i] = factoryIn[i];
     neutral();
 
     // 2c. The scan starts on the MUSIC list (the test cart has effects on players 1 and 2).
@@ -314,7 +337,8 @@ int main(int argc, char **argv)
           "rates %u / %u, want 13379 / 18157", g_tables[0].gameRate, g_tables[1].gameRate);
 
     // 2f. The factory map and buttons are the performance set (mod.h).
-    CHECK(g_patch.mod[SRC_MAIN].dest == DEST_CHAOS && g_patch.mod[SRC_AU2].dest == DEST_RBAR
+    CHECK(g_patch.mod[SRC_MAIN].dest == DEST_CHAOS && g_patch.mod[SRC_AU2].dest == DEST_VSHIFT
+          && g_patch.mod[SRC_AU1].dest == DEST_TABLE && g_patch.mod[SRC_CV1].dest == DEST_REVERB
           && g_patch.mod[SRC_X].dest == DEST_TEMPO && g_patch.btn[0].dest == DEST_RBAR
           && g_patch.btn[1].dest == DEST_REROLL && g_patch.btn[6].dest == DEST_CLEAR
           && g_patch.btn[7].dest == DEST_CHAOS && g_patch.btn[4].dest == DEST_TRANS,
@@ -548,8 +572,7 @@ int main(int argc, char **argv)
     mod_default_patch();
     neutral();
     mod_patch_applied();
-    CHECK(g_patch.mod[SRC_AU1].dest == DEST_PLAY && g_patch.swDown == SWD_PLAY,
-          "factory: AU1 %u, switch down %u, want PLAY", g_patch.mod[SRC_AU1].dest, g_patch.swDown);
+    CHECK(g_patch.swDown == SWD_PLAY, "factory: switch down %u, want PLAY", g_patch.swDown);
     mod_stop();
     mod_song_select(1);
     CHECK(!player_running() && g_song == 1 && g_songPlaying == -1, "select cues: running %d cue %d playing %d",

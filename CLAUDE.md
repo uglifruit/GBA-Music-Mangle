@@ -4,8 +4,9 @@ GBA Multiboot link for the Music Thing Modular **Workshop Computer**. The Worksh
 has a **commercial cartridge inserted**. The payload scans the cart for Nintendo's MP2K
 (Sappy/m4a) song data, and plays it through its own engine, clocked and mangled by the modular.
 
-Read this before editing. **THIS FILE DOES NOT GO INTO A RELEASE.** It is working notes addressed to
-an assistant.
+Read this before editing. It is working notes addressed to an assistant, kept in the public repo on
+purpose (Andy, 2026-11-07: it may help others working on the code). Keep it out of the user-facing
+docs: the README and docs/MORE.md never quote it.
 
 ## What this is
 
@@ -22,14 +23,15 @@ an assistant.
   layers** (multiboot, the serial link, the inverted pulse pins, the inter-word gap, the protocol
   rules, the DMA-ring audio design, IWRAM placement, the `-nostdlib` tripwire, the UI rules, the HAL
   fixes, `info.yaml` and the validator). None of it is repeated here, and all of it applies.
-- **Repo: `uglifruit/GBA-Music-Mangle`** (private, created 2026-10-26 as `GBA_CartPlayer`, renamed
-  2026-10-27; GitHub redirects the old URL). Code comments still say "GBA Cart Player": the same
+- **Repo: `uglifruit/GBA-Music-Mangle`** (PUBLIC as of 2026-11-07; created 2026-10-26 as
+  `GBA_CartPlayer`, renamed 2026-10-27; GitHub redirects the old URL). Code comments still say "GBA Cart Player": the same
   card. No card number yet.
 - **The player (`payload/player.c`, `cgb.c`, `cgb.h`) was written by an outside developer** against
   `docs/PLAYER_SPEC.md`, on branch `codex/mp2k-player`, merged 2026-10-26. It passed the spec's checks.
   **The spec is the contract**: `player.h` is its interface. Changing a hook's meaning means
   changing the spec too.
-- **`info.yaml`** (added 2026-10-27, `draft: true`, version 0.1.0) follows FM's layout. It passes
+- **`info.yaml`** (added 2026-10-27; `draft: false`, **version 1.0.0, Status Released** since
+  2026-11-07, Andy's call; no monorepo pull request yet, he will say when) follows FM's layout. It passes
   the monorepo validator from the local clone: `cd ..\Workshop_Computer && node
   tools/sitegen/src/validate/cli.js <path to this info.yaml>`. Keep its panel, knob and switch
   descriptions in step with the factory map (mod.h) and README.
@@ -69,6 +71,17 @@ an assistant.
   also calls a short loop on a player ≠ 0 an SFX (mktestrom's PSG effect). `player_song_shape()`
   (player.c) walks track 1; `tools/m4a_scan.py` mirrors it. scan.c caches the table's whole list
   with kinds (`build_all`), `scan_forget()` drops it. SFX and JINGLE set `g_plOnce`.
+
+- **Licences: NOTICE.md (2026-11-07) is the one place** that says what is under what. MIT for our
+  code; ComputerCard.h MIT (Chris Johnson, full text in NOTICE); Krawall player LGPL-2.1; Pico SDK
+  BSD-3 (notice reproduced, binary redistribution needs it); `payload/m4a_tables.c` and `cgb.c` are
+  Nintendo's tables/routines via pret (no licence: stated as NOT under MIT); gbafix.py's logo bytes;
+  data from BinarySerializer.Audio.GBA and shinen-gax-python (MIT, credited). References with no code
+  taken: saptapper (LGPL-3.0), agbplay (LGPL-3.0), gaxtapper (GPL-3.0; so never copy its code),
+  UnkrawerterGBA (MIT), krawerter (LGPL-2.1). Checked with `gh api repos/<r>/license`. Add any new
+  third-party code or data to NOTICE.md. The payload's font5x7.h (from 108) has no recorded origin.
+- **Heard OK on hardware (Andy, 2026-11-07):** Tang Tang (GAX 2), Super Puzzle Fighter (GBAModPlay),
+  Lemony Snicket (Krawall).
 
 ## OPEN RISKS, in the order the first hardware session should settle them
 
@@ -256,6 +269,13 @@ an assistant.
     - Samples can be up to 512 KB.
     - A 255 ends a version 2 order list.
     - Running off the end of the list is a loop (version 2).
+- **Zelda: A Link to the Past & Four Swords (AZLP, 2026-11-07):** Andy hears it at about 3/4 speed
+  (Mario Kart is right). Checked statically and left open: standard m4a (MPlayMain's 150 threshold,
+  MPlayStart tempo 150/0x100, TEMPO x 2), m4aSoundMain once a frame from a VCOUNT handler pair
+  (lines 0/32), and our tick rate equals m4a's for its headers (song 1: 90 BPM, 35.9 ticks/s). The
+  game's sound-command handler (0x0800D52C, `0x8006nnnn` = TempoControl) is TempoControl's only
+  caller, and no sender of 0x8006 was found. Workaround: BASE TEMPO 27 (x1.34), saved to a slot. Next
+  step, if wanted: run the game under emulation and read player 1's tempoU (0x0203206E).
 - **Lemony Snicket's Krawall has no "Krawall" text**, only `$Id: player.c,v 1.4 2003/03/19 23:12:15
   seb Exp`. The sniff now takes `$Id: player.c,v ` when " seb " follows (`Sniff.needs`). Its 20
   modules are all 2003-format, sample-based (226-sample bank, unsigned, centred on 128).
@@ -437,8 +457,12 @@ an assistant.
   RESTART BAR (and switch-down RESET) go to `player_queue_restart()`, and `player_tick()` does
   them at the top of the first tick on the next section line (`s_barPos == 0`), with no
   `clock_reset()`: it is already on the grid. A new song clears the queue. PLAY shows QUEUED.
+- **Factory map since 2026-11-07 (Andy asked):** CV1 → REVERB (63), CV2 → TRANSPOSE (32: 2 V an
+  octave), AU1 → TABLE OFFSET (16), AU2 → VOICE SHIFT (16): depth 16 widens the dead zone on a +-5 V
+  throw (+-15 entries / +-13 programs). Per-source depths in `mod_default_patch()`. PLAY is the switch
+  down and A; RESTART BAR button A. No patch bump: saved slots keep their own map.
 - **The factory map and buttons are a performance set** (2026-10-27, Andy asked for it): MAIN →
-  CHAOS, AU2 → RESTART BAR; A RESTART BAR, B REROLL, L/R hold REVERSE/CRUSH, UP/DOWN TRANSPOSE,
+  CHAOS, AU2 → RESTART BAR (until 2026-11-07); A RESTART BAR, B REROLL, L/R hold REVERSE/CRUSH, UP/DOWN TRANSPOSE,
   LEFT CLEAR, RIGHT step CHAOS. Layers, sample start and the voice-shift/table buttons left the
   defaults. modtest now sets up the mappings each test uses instead of relying on the factory.
 - **Patch v5 moved BASE again, to `base[DEST_MAX = 48]` at the very end**: `cartTag` follows v3's

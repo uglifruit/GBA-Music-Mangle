@@ -1,5 +1,6 @@
 // m4a_tables.c — the engine's lookup tables, transcribed verbatim from pret's pokeemerald
 // src/m4a_tables.c. See m4a.h. Do not edit by hand; re-transcribe.
+// Nintendo's tables, as reconstructed by pret: NOT under this repository's MIT licence (NOTICE.md).
 
 #include "m4a.h"
 

@@ -16,7 +16,8 @@ Voice](https://github.com/uglifruit/GBA_FM)**: the same cable and the same loade
 
 **[Further information](docs/MORE.md)** · **[Program Card Firmware](UF2/gba_link.uf2)**
 
-> **Beta.** Tested on hardware with Pokémon Ruby, Lady Sia and others; testing still under way.
+> Tested on hardware with Pokémon Ruby, Lady Sia, Tang Tang, Super Puzzle Fighter II Turbo, Lemony Snicket
+> and others.
 
 ---
 
@@ -72,10 +73,10 @@ then SET > RESCAN CART.
 | Inputs | Default job |
 |---|---|
 | **Pulse In 2** | **Clock** (set its PPQN on the SET page). Unpatched, songs play at their own tempo. |
-| **Audio In 1** | **Play** the cued song |
-| **Audio In 2** | **Restart bar**: from a clock divider, a beat-repeat |
-| **CV In 1** | **Voice shift**: every instrument swapped for another from the game |
-| **CV In 2** | **Transpose**, 1V/oct |
+| **Audio In 1** | **Table offset**: instruments read from further along (or back down) the game's table, up to 15 either way at ±5 V |
+| **Audio In 2** | **Voice shift**: every instrument swapped for another from the game, up to 13 either way at ±5 V |
+| **CV In 1** | **Reverb** |
+| **CV In 2** | **Transpose**, 2 V an octave (MAP depth 63 makes it 1V/oct) |
 | **Main knob** | **Chaos**: right of noon a pattern that repeats each loop, left of noon free chaos |
 | **X knob** | **Tempo**, ×¼ to ×4 |
 | **Y knob** | **ROM scrub**: samples read from the wrong part of the cartridge |
@@ -126,7 +127,7 @@ each mangle.
 The game's sounds are sorted for you: **MUSIC** (songs, which loop, and jingles, which play once) and
 **SFX** (short effects). The list starts on MUSIC. An effect plays once, and **every PLAY restarts it
 at once**, so the SFX list works as a drum machine of the game's sounds: choose one with L/R, fire it
-with PLAY from a gate on Audio In 1.
+with PLAY (the switch down, or a gate on an input mapped to PLAY on the MAP page).
 
 ## Perform mode
 
@@ -162,10 +163,11 @@ where each one rests. Most do something either side of noon:
 | **Crush** | Lower sample rate | Fewer bits |
 | **ROM scrub** | Samples read from elsewhere in the cartridge | |
 | **Transpose**, **Fine pitch**, **Tempo** | Up | Down |
+| **Reverb** | More reverb | Less (on Nintendo's engine, the song's own reverb removed) |
 | **Chaos** | Dice on every note, repeating each loop | Free chaos, never repeating |
 
 On games using Nintendo's engine there are also **Attack, Decay, Sustain, Release, Note length,
-Reverb, Vibrato, Tremolo and LFO speed**, acting on the game's own envelopes and effects. (The other
+Vibrato, Tremolo and LFO speed**, acting on the game's own envelopes and effects. (The other
 engines show these as N/A.)
 
 **CHAOS** rolls dice on every note. A little makes notes jump by fifths and octaves and pan hard;
@@ -219,5 +221,5 @@ a problem.
   mean, building from source, and the test tools.
 
 By **Andy Jenkinson** (YT/IG @uglifruity), 2026. Built on Chris Johnson's ComputerCard library for
-Tom Whitwell's Music Thing Modular Workshop Computer. MIT licensed, except the Krawall player, which
-is LGPL-2.1 (see [Further information](docs/MORE.md#licence)).
+Tom Whitwell's Music Thing Modular Workshop Computer. MIT licensed, except for a few parts with
+their own terms (the Krawall player is LGPL-2.1): see [NOTICE.md](NOTICE.md).
