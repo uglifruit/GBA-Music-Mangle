@@ -12,6 +12,14 @@
 extern "C" {
 #endif
 
+// A player's per-tick work, run from the GBA's IWRAM (payload/gba.h's IWRAM_CODE): code in EWRAM costs
+// six cycles an ARM instruction. Nothing on the PC, or in an ARM build without the payload's sections.
+#if defined(__arm__) && !defined(HOST)
+#define ENG_IWRAM __attribute__((section(".iwram"), noinline))
+#else
+#define ENG_IWRAM
+#endif
+
 // The cartridge as the player sees it: `data` holds the byte at bus address `base`. On the GBA
 // data == (const uint8_t *)base; on the PC it is the loaded image.
 typedef struct {

@@ -203,6 +203,16 @@ an assistant.
     on HP CoS under fuzz, in the old engine too).
   - Test suite rewritten for frames (make_demo.py's song moved to track 4; its macro waits for key-off
     then STOPs). The scratchpad harness `mxdbg/mxlive.c` runs a song in real time and logs voices.
+  - **CPU (2026-11-07, Andy: "far less responsive, tempo speeding up and slowing down" on Beckham
+    song 3):** the rewrite starved the GBA. `payload/gbaprof.py` (unicorn + a cycle model) measured
+    `ms_tick` at 46 % of the CPU, the mixer 23 %, `levels` 8 %: the screen got 2 frames a second
+    and the clock fell behind and caught up in bursts (MAX_CATCHUP, the 1/8 s dt cap). Causes: the
+    track gates were a 16 x 16 voice scan, four times a transport tick (a third of the CPU on their
+    own), and `ms_update` re-ran every voice's levels after every ms_tick. Now one pass for the gates,
+    `ms_update` on the tick only when a voice started (else `reap()` lets finished samples go), and
+    `ms_tick` in IWRAM (`ENG_IWRAM`, engines/common/eng.h). Song 3: ms_tick 4 %, UI 44 frames/s,
+    ticks on tempo. MusyX renders byte-identical (96 WAVs, 12 carts). Every engine's busiest song
+    measured afterwards keeps its tempo; Lemony Snicket's mixer is the heaviest (46 %).
   - **HARDWARE CHECKS ASKED FOR (2026-11-06):** Lady Sia and Beckham against the games themselves
     (balance of Game Boy parts to samples, note lengths and releases, drum kits, the strings).
 - **More dumps (same folder):** Lady Sia (MusyX, 12 songs; sample starts identical before and after
@@ -493,6 +503,14 @@ an assistant.
 - Two help lines were found running off the screen by it (BTN, BASE) and shortened.
 
 ## Payload facts
+
+- **Profiling: `payload/gbaprof.py CART SONG SECS`** runs the real payload.elf under unicorn with
+  cycle costs (ARM fetch from EWRAM 6, IWRAM 1, +2 fetches a block; ROM data 4/6, EWRAM 3/6), Timer
+  2/3 and VCOUNT driven by the cycle count, and the DMA2 interrupt's mixer_render replayed at each
+  ui_frame stop. It reports ticks/s against the BPM, UI frames/s, the mixer's share and a flat
+  profile; FOCUS=fn breaks a function down by block (add -g to build.sh's CFLAGS for line numbers).
+  Run it on a busy song after any engine change. Engine code all runs from EWRAM as ARM: six cycles
+  an instruction, so a per-tick loop over voices adds up fast.
 
 - 140.5 KB with all four engines (2026-11-06), about 21.4 s to upload (65.9 KB / 10 s with MP2K alone). IWRAM holds about 11 KB: the DMA handlers, the dispatcher,
   `mixer_render`, the scan loop, the drawing primitives, `mod_update`, `clock_service`,

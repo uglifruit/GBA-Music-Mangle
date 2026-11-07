@@ -149,6 +149,7 @@ python -I engines/musyx/tests/make_demo.py msdemo.gba  # a small authored MusyX 
 python -I tools/pcplay/mkengines.py eng test.gba     # synthetic GAX, Krawall, GBAModPlay, MP2K + GAX carts
 tools/pcplay/build/modtest test.gba msdemo.gba eng/gax.gba eng/krawall.gba eng/mixed.gba eng/krawall2.gba eng/gax2.gba eng/lsplay.gba eng/lsplay2.gba
 tools/pcplay/build/pcplay yourgame.gba --full --songs   # every engine, as RESCAN FULL
+cd payload && python gbaprof.py yourgame.gba 3 2        # the GBA's CPU on song 3, 2 s (pip install unicorn)
 ```
 `pcplay` renders a song with the payload's own engine, the Game Boy channels through a simple
 emulation (`--no-psg` leaves them out). Use your own cartridge dumps. The player's interface and

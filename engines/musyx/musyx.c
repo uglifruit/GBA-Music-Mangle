@@ -493,9 +493,13 @@ static int process_track(MsPlayer *p,unsigned c){
     }
     return 1;
 }
+// A PCM voice whose sample has played out lets it go (and the voice, once its macro is done); 1 if not.
+static int reap(MsPlayer *p,unsigned i){MsVoice *v=&p->voices[i];
+    if(p->hooks.done&&p->hooks.done(p->hooks.user,i)){v->has_sample=v->sounding=0;if(!v->ip)off(p,i);return 0;}
+    return 1;
+}
 void ms_update(MsPlayer *p){
-    for(unsigned i=0;i<MS_VOICES;++i){MsVoice *v=&p->voices[i];if(!v->active||!v->has_sample)continue;
-        if(p->hooks.done&&p->hooks.done(p->hooks.user,i)){v->has_sample=v->sounding=0;if(!v->ip)off(p,i);continue;}
+    for(unsigned i=0;i<MS_VOICES;++i){MsVoice *v=&p->voices[i];if(!v->active||!v->has_sample||!reap(p,i))continue;
         levels(p,i);if(p->hooks.update)p->hooks.update(p->hooks.user,i,&v->pcm);
     }
     psg_sync(p);
@@ -510,14 +514,21 @@ void ms_frame(MsPlayer *p){
 }
 // A voice the song's end waits for: its macro still runs, or it plays a sample that will end.
 static int busy(const MsPlayer *p,unsigned i){const MsVoice *v=&p->voices[i];return v->active&&(v->ip||(i<MS_VOICES&&v->has_sample&&v->pcm.loop==MS_NOLOOP));}
-void ms_tick(MsPlayer *p){
+ENG_IWRAM void ms_tick(MsPlayer *p){
     if(!p->running)return;
     for(unsigned i=0;i<MS_ALL;++i){MsVoice *v=&p->voices[i];if(v->active&&!v->keyed&&v->gate_left&&!--v->gate_left)key_off(p,i);}
     unsigned ended=0;for(unsigned c=0;c<17;++c){if(!process_track(p,c))return;ended+=p->tracks[c].ended;}
-    for(unsigned i=0;i<MS_ALL;++i)if(p->voices[i].active&&p->voices[i].fresh){p->voices[i].fresh=0;macro_run(p,i);} // the notes' first steps
-    ms_update(p);
-    for(unsigned c=0;c<16;++c){MsTrack *t=&p->tracks[c];unsigned gate=0;for(unsigned i=0;i<MS_ALL;++i)if(p->voices[i].active&&!p->voices[i].keyed&&p->voices[i].owner==c)gate=1;
-        t->gate=(uint8_t)gate;if(t->activity)t->activity-=((t->activity>>3)+1);}
+    unsigned started=0;
+    for(unsigned i=0;i<MS_ALL;++i)if(p->voices[i].active&&p->voices[i].fresh){p->voices[i].fresh=0;macro_run(p,i);started=1;} // the notes' first steps
+    // Levels and pitches change on the tick only when a note started (key-off moves an envelope, which
+    // the frame runs): otherwise only let finished samples go. Recomputing every voice four times a
+    // transport tick cost the GBA a fifth of its time on a busy song.
+    if(started)ms_update(p);
+    else for(unsigned i=0;i<MS_VOICES;++i)if(p->voices[i].active&&p->voices[i].has_sample)(void)reap(p,i);
+    // Each track's gate: one pass over the voices (a pass per track was a third of the GBA's time).
+    unsigned gates=0;for(unsigned i=0;i<MS_ALL;++i){const MsVoice *v=&p->voices[i];if(v->active&&!v->keyed&&v->owner<16)gates|=1u<<v->owner;}
+    for(unsigned c=0;c<16;++c){MsTrack *t=&p->tracks[c];
+        t->gate=(uint8_t)((gates>>c)&1u);if(t->activity)t->activity-=((t->activity>>3)+1);}
     ++p->ticks;
     // Every track has ended: the song ends when its voices are done, or four beats on (a voice no
     // key-off reaches, PLAYMACRO's, could hold it for ever).
